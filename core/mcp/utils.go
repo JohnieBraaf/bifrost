@@ -525,7 +525,7 @@ func retrieveExternalToolsDetailed(ctx context.Context, client *client.Client, c
 		bifrostTool := convertMCPToolToBifrostSchema(&mcpTool, logger)
 		// Prefix tool name with client name to make it permanent (using '-' as separator)
 		// Keep the original tool name (don't sanitize) so we can call the MCP server correctly
-		prefixedToolName := fmt.Sprintf("%s-%s", clientName, mcpTool.Name)
+		prefixedToolName := fmt.Sprintf("%s_%s", clientName, mcpTool.Name)
 		// Update the tool's function name to match the prefixed name
 		if bifrostTool.Function != nil {
 			bifrostTool.Function.Name = prefixedToolName
@@ -649,7 +649,7 @@ func shouldSkipToolForRequest(ctx context.Context, clientName, toolName string) 
 			}
 
 			// Handle wildcard "clientName-*" - if present, all tools are included for this client
-			if slices.Contains(includeToolsList, fmt.Sprintf("%s-*", clientName)) {
+			if slices.Contains(includeToolsList, fmt.Sprintf("%s_*", clientName)) {
 				return false // All tools allowed
 			}
 
@@ -1078,7 +1078,7 @@ func hasToolCallsForResponsesResponse(response *schemas.BifrostResponsesResponse
 // Returns:
 //   - string: Sanitized tool name without prefix (e.g., "add")
 func stripClientPrefix(prefixedToolName, clientName string) string {
-	prefix := clientName + "-"
+	prefix := clientName + "_"
 	if strings.HasPrefix(prefixedToolName, prefix) {
 		return strings.TrimPrefix(prefixedToolName, prefix)
 	}

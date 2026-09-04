@@ -1579,7 +1579,7 @@ func (gs *LocalGovernanceStore) MCPClientToolAccess(ctx *schemas.BifrostContext,
 		return nil, false
 	}
 	// Narrow the whole client (name-*) to what access grants; empty means not granted.
-	whole := []string{clientName + "-" + grant.Wildcard}
+	whole := []string{clientName + "_" + grant.Wildcard}
 	if access == nil {
 		return whole, true
 	}
