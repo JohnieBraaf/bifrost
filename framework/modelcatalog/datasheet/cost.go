@@ -2265,6 +2265,20 @@ func (s *Store) getBasePricing(model, provider string, requestType schemas.Reque
 		}
 	}
 
+	// Fallback: try "anthropic" provider for pricing when custom provider not found
+	if provider != "anthropic" && provider != string(schemas.Vertex) && provider != string(schemas.Bedrock) && provider != string(schemas.Gemini) {
+		pricing, ok = s.pricingData[makeKey(model, "anthropic", mode)]
+		if ok {
+			return &pricing, true
+		}
+		if hasFallbackMode {
+			pricing, ok = s.pricingData[makeKey(model, "anthropic", fallbackMode)]
+			if ok {
+				return &pricing, true
+			}
+		}
+	}
+
 	return nil, false
 }
 
