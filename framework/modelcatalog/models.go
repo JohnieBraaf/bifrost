@@ -2,6 +2,7 @@ package modelcatalog
 
 import (
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 
@@ -303,14 +304,12 @@ func (mc *ModelCatalog) computeProvidersForModel(model string) []schemas.ModelPr
 //     provider's catalog.
 func (mc *ModelCatalog) IsModelAllowedForProvider(provider schemas.ModelProvider, model string, providerConfig *configstore.ProviderConfig, allowedModels schemas.WhiteList) bool {
 	isCustomProvider := false
-	hasListModelsEndpointDisabled := false
 	if providerConfig != nil && providerConfig.CustomProviderConfig != nil {
 		isCustomProvider = true
-		hasListModelsEndpointDisabled = !providerConfig.CustomProviderConfig.IsOperationAllowed(schemas.ListModelsRequest)
 	}
 
 	if allowedModels.IsUnrestricted() {
-		if isCustomProvider && hasListModelsEndpointDisabled {
+		if isCustomProvider {
 			return true
 		}
 		return slices.Contains(mc.GetProvidersForModel(model), provider)
@@ -322,6 +321,15 @@ func (mc *ModelCatalog) IsModelAllowedForProvider(provider schemas.ModelProvider
 	// Bare-name match needs no catalog access and covers most allowlists.
 	if slices.Contains(allowedModels, model) {
 		return true
+	}
+
+	// Glob/wildcard match: "claude-*" matches "claude-sonnet-4-6"
+	for _, allowedModel := range allowedModels {
+		if strings.ContainsAny(allowedModel, "*?") && !strings.Contains(allowedModel, "/") {
+			if matched, _ := path.Match(allowedModel, model); matched {
+				return true
+			}
+		}
 	}
 
 	// Only provider-prefixed entries ("openai/gpt-4o") need the provider
