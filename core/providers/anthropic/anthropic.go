@@ -278,6 +278,7 @@ func completeRequest(
 	// response is buffered normally.
 	if responseThreshold > 0 && !isCountTokens {
 		resp.StreamBody = true
+	req.SetConnectionClose()
 		requestClient = providerUtils.BuildLargeResponseClient(client, responseThreshold)
 	}
 
