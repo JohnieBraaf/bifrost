@@ -25,17 +25,17 @@ func ParseVirtualKeyFromFastHTTPRequest(req *fasthttp.RequestCtx) *string {
 	if authHeader != "" {
 		if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
 			authHeaderValue := strings.TrimSpace(authHeader[7:]) // Remove "Bearer " prefix
-			if authHeaderValue != "" && strings.HasPrefix(strings.ToLower(authHeaderValue), VirtualKeyPrefix) {
+			if authHeaderValue != ""{
 				return bifrost.Ptr(authHeaderValue)
 			}
 		}
 	}
 	xAPIKey := string(req.Request.Header.Peek("x-api-key"))
-	if xAPIKey != "" && strings.HasPrefix(strings.ToLower(xAPIKey), VirtualKeyPrefix) {
+	if xAPIKey != ""{
 		return bifrost.Ptr(xAPIKey)
 	}
 	xGoogleAPIKey := string(req.Request.Header.Peek("x-goog-api-key"))
-	if xGoogleAPIKey != "" && strings.HasPrefix(strings.ToLower(xGoogleAPIKey), VirtualKeyPrefix) {
+	if xGoogleAPIKey != ""{
 		return bifrost.Ptr(xGoogleAPIKey)
 	}
 	azureAPIKey := string(req.Request.Header.Peek("api-key"))
