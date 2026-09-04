@@ -3050,10 +3050,6 @@ func mergeGovernanceConfig(ctx context.Context, config *Config, configData *Conf
 						logger.Warn("virtual key %s: env/vault ref %q could not be resolved, skipping update", newVirtualKey.ID, configData.Governance.VirtualKeys[i].Value.GetRawRef())
 						break
 					}
-					if !strings.HasPrefix(resolvedVal, governance.VirtualKeyPrefix) {
-						logger.Warn("virtual key %s has a value in the config file that does not have %s prefix. We are generating a new one for you.", newVirtualKey.ID, governance.VirtualKeyPrefix)
-						configData.Governance.VirtualKeys[i].Value = *schemas.NewSecretVar(governance.GenerateVirtualKey())
-					}
 					// Reconcile the file value against the stored rotation state.
 					// ConfigHash stays fileVKHash (set above, derived from the raw
 					// file struct) in every branch, so the next boot recomputes the
@@ -3119,10 +3115,6 @@ func mergeGovernanceConfig(ctx context.Context, config *Config, configData *Conf
 				logger.Warn("virtual key %s: env/vault ref %q could not be resolved, skipping", newVirtualKey.ID, configData.Governance.VirtualKeys[i].Value.GetRawRef())
 				skippedNewVirtualKeyIDs[configData.Governance.VirtualKeys[i].ID] = true
 				continue
-			}
-			if !strings.HasPrefix(resolvedVal, governance.VirtualKeyPrefix) {
-				logger.Warn("virtual key %s has a value in the config file that does not have %s prefix. We are generating a new one for you.", newVirtualKey.ID, governance.VirtualKeyPrefix)
-				configData.Governance.VirtualKeys[i].Value = *schemas.NewSecretVar(governance.GenerateVirtualKey())
 			}
 			// Resolve MCP client names to IDs for config file mcp_configs
 			configData.Governance.VirtualKeys[i].MCPConfigs = resolveMCPConfigClientIDs(
