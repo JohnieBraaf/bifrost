@@ -1,6 +1,7 @@
 package grant
 
 import (
+	"path"
 	"slices"
 	"strings"
 
@@ -313,7 +314,20 @@ func providerPermitAllowsModel(pp *schemas.ProviderPermit, model string) bool {
 	if model == "" {
 		return true
 	}
-	return pp.AllowedModels.IsAllowed(model) && !pp.BlacklistedModels.IsBlocked(model)
+	if pp.BlacklistedModels.IsBlocked(model) {
+		return false
+	}
+	if pp.AllowedModels.IsAllowed(model) {
+		return true
+	}
+	for _, allowed := range pp.AllowedModels {
+		if strings.ContainsAny(allowed, "*?") && !strings.Contains(allowed, "/") {
+			if matched, _ := path.Match(allowed, model); matched {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // weightedProviderPermitFor returns the permit's first provider permit for provider that sets a
