@@ -903,9 +903,7 @@ func hasVirtualKeyCredential(ctx *fasthttp.RequestCtx) bool {
 	}
 
 	if apiKey := strings.TrimSpace(string(ctx.Request.Header.Peek("x-api-key"))); apiKey != "" {
-		if strings.HasPrefix(strings.ToLower(apiKey), governance.VirtualKeyPrefix) {
-			return true
-		}
+		return true
 	}
 
 	if apiKey := strings.TrimSpace(string(ctx.Request.Header.Peek("x-goog-api-key"))); apiKey != "" {
