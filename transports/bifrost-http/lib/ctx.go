@@ -462,7 +462,7 @@ func ConvertToBifrostContext(ctx *fasthttp.RequestCtx, store HandlerStore) (*sch
 				}
 			}
 		}
-		if keyStr == "x-api-key" && strings.HasPrefix(strings.ToLower(string(value)), governance.VirtualKeyPrefix) {
+		if keyStr == "x-api-key" {
 			bifrostCtx.SetValue(schemas.BifrostContextKeyVirtualKey, string(value))
 			return true
 		}
