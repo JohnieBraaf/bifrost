@@ -73,21 +73,6 @@ func StreamingShimMiddleware() schemas.BifrostHTTPMiddleware {
 				// OpenAI format response (openai-completions providers): emit OpenAI SSE
 				sseBody = jsonToOpenAISSE(msg)
 			} else {
-				// Anthropic format response: strip thinking blocks and emit Anthropic SSE
-				if content, ok := msg["content"].([]interface{}); ok {
-					var filtered []interface{}
-					for _, c := range content {
-						if block, ok := c.(map[string]interface{}); ok {
-							if t, _ := block["type"].(string); t != "thinking" {
-								filtered = append(filtered, c)
-							}
-						}
-					}
-					if filtered == nil {
-						filtered = []interface{}{}
-					}
-					msg["content"] = filtered
-				}
 				sseBody = jsonMsgToSSE(msg)
 			}
 			ctx.Response.Reset()
@@ -144,6 +129,8 @@ func jsonMsgToSSE(msg map[string]interface{}) []byte {
 		startBlock := block
 		if blockType == "text" {
 			startBlock = map[string]interface{}{"type": "text", "text": ""}
+		} else if blockType == "thinking" {
+			startBlock = map[string]interface{}{"type": "thinking", "thinking": "", "signature": block["signature"]}
 		} else if blockType == "tool_use" {
 			startBlock = map[string]interface{}{
 				"type": blockType, "id": block["id"], "name": block["name"],
@@ -159,6 +146,13 @@ func jsonMsgToSSE(msg map[string]interface{}) []byte {
 				"type": "content_block_delta", "index": i,
 				"delta": map[string]interface{}{"type": "text_delta", "text": block["text"]},
 			})
+		case "thinking":
+			if thinking, ok := block["thinking"].(string); ok && thinking != "" {
+				emit("content_block_delta", map[string]interface{}{
+					"type": "content_block_delta", "index": i,
+					"delta": map[string]interface{}{"type": "thinking_delta", "thinking": thinking},
+				})
+			}
 		case "tool_use":
 			if input, ok := block["input"]; ok {
 				if inputJSON, err := json.Marshal(input); err == nil {
