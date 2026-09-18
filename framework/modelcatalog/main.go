@@ -171,11 +171,18 @@ func Init(ctx context.Context, config *Config, configStore configstore.ConfigSto
 					}
 				}()
 			} else {
-				if err := mc.withDistributedLock(ctx, "model_catalog_pricing_startup_sync", 10, func() error {
-					return mc.runPricingSync(ctx)
-				}); err != nil {
-					pricingErr = fmt.Errorf("failed to sync pricing data: %w", err)
-				}
+				logger.Info("no pricing data in database, syncing from URL in background")
+				mc.wg.Add(1)
+				go func() {
+					defer mc.wg.Done()
+					if err := mc.withDistributedLock(mc.syncCtx, "model_catalog_pricing_startup_sync", 10, func() error {
+						return mc.runPricingSync(mc.syncCtx)
+					}); err != nil {
+						logger.Warn("background startup pricing sync failed: %v", err)
+					} else {
+						logger.Info("background startup pricing sync completed successfully")
+					}
+				}()
 			}
 		}()
 		go func() {
@@ -199,11 +206,18 @@ func Init(ctx context.Context, config *Config, configStore configstore.ConfigSto
 					}
 				}()
 			} else {
-				if err := mc.withDistributedLock(ctx, "model_catalog_params_startup_sync", 10, func() error {
-					return mc.runParamsSync(ctx)
-				}); err != nil {
-					paramsErr = fmt.Errorf("failed to sync model parameters data: %w", err)
-				}
+				logger.Info("no model parameters in database, syncing from URL in background")
+				mc.wg.Add(1)
+				go func() {
+					defer mc.wg.Done()
+					if err := mc.withDistributedLock(mc.syncCtx, "model_catalog_params_startup_sync", 10, func() error {
+						return mc.runParamsSync(mc.syncCtx)
+					}); err != nil {
+						logger.Warn("background startup model parameters sync failed: %v", err)
+					} else {
+						logger.Info("background startup model parameters sync completed successfully")
+					}
+				}()
 			}
 		}()
 		wg.Wait()
