@@ -1,6 +1,6 @@
 module github.com/maximhq/bifrost/plugins/prompts
 
-go 1.27.0
+go 1.26.0
 
 require (
 	github.com/maximhq/bifrost/core v1.8.3
