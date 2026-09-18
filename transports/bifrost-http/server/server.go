@@ -2947,7 +2947,6 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 	inferenceMiddlewares = append(inferenceMiddlewares, handlers.TransportInterceptorMiddleware(s.Config))
 	inferenceMiddlewares = append([]schemas.BifrostHTTPMiddleware{s.TracingMiddleware.Middleware()}, inferenceMiddlewares...)
 
-	inferenceMiddlewares = append([]schemas.BifrostHTTPMiddleware{lib.StreamingShimMiddleware()}, inferenceMiddlewares...)
 	err = s.RegisterInferenceRoutes(s.Ctx, inferenceMiddlewares...)
 	if err != nil {
 		if s.WSTicketStore != nil {
