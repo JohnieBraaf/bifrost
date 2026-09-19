@@ -648,15 +648,20 @@ func shouldSkipToolForRequest(ctx context.Context, clientName, toolName string) 
 				return true // No tools allowed
 			}
 
-			// Handle wildcard "clientName-*" - if present, all tools are included for this client
-			if slices.Contains(includeToolsList, fmt.Sprintf("%s_*", clientName)) {
-				return false // All tools allowed
+			// Handle wildcard: canonical format is "clientName-*" (dash), also accept "clientName_*" (underscore)
+			if slices.Contains(includeToolsList, clientName+"-*") ||
+				slices.Contains(includeToolsList, clientName+"_*") {
+				return false // All tools allowed for this client
 			}
 
-			// Check if specific tool is in the list (format: clientName-toolName)
-			// Note: toolName is already prefixed when coming from ToolMap, so use it directly
+			// Check specific tool: ToolMap uses underscore separator, include list uses dash separator
 			if slices.Contains(includeToolsList, toolName) {
-				return false // Tool is explicitly allowed
+				return false // Tool is explicitly allowed (underscore format)
+			}
+			// Also check with underscore→dash conversion for cross-format compatibility
+			dashedName := clientName + "-" + strings.TrimPrefix(toolName, clientName+"_")
+			if dashedName != toolName && slices.Contains(includeToolsList, dashedName) {
+				return false // Tool is explicitly allowed (dash format)
 			}
 
 			// If includeTools is specified but this tool is not in it, skip it

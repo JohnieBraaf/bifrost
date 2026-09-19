@@ -5525,14 +5525,6 @@ func (bifrost *Bifrost) tryRequest(ctx *schemas.BifrostContext, req *schemas.Bif
 		return nil, bifrostErr
 	}
 
-	// Add MCP tools to request if MCP is configured and requested.
-	// Timed as "miscellaneous": the tool-definition merge sits on no other span.
-	if bifrost.MCPManager != nil {
-		mcpSpan := bifrost.startCoreSpan(ctx, "miscellaneous")
-		req = bifrost.MCPManager.AddToolsToRequest(ctx, req)
-		bifrost.endCoreSpan(mcpSpan)
-	}
-
 	tracer := bifrost.getTracer()
 	if tracer == nil {
 		bifrostErr := newBifrostErrorFromMsg("tracer not found in context")
@@ -5596,6 +5588,13 @@ func (bifrost *Bifrost) tryRequest(ctx *schemas.BifrostContext, req *schemas.Bif
 		bifrostErr := newBifrostErrorFromMsg("bifrost request after plugin hooks cannot be nil")
 		bifrostErr.PopulateExtraFields(req.RequestType, provider, model, model)
 		return nil, bifrostErr
+	}
+
+	// Add MCP tools after governance has stamped the VK's tool grants on the context.
+	if bifrost.MCPManager != nil {
+		mcpSpan := bifrost.startCoreSpan(ctx, "miscellaneous")
+		preReq = bifrost.MCPManager.AddToolsToRequest(ctx, preReq)
+		bifrost.endCoreSpan(mcpSpan)
 	}
 
 	// "miscellaneous" phase: field re-read + channel-message setup before enqueue.
@@ -5794,14 +5793,6 @@ func (bifrost *Bifrost) tryStreamRequest(ctx *schemas.BifrostContext, req *schem
 		return nil, bifrostErr
 	}
 
-	// Add MCP tools to request if MCP is configured and requested.
-	// Timed as "miscellaneous": the tool-definition merge sits on no other span.
-	if req.RequestType != schemas.SpeechStreamRequest && req.RequestType != schemas.TranscriptionStreamRequest && bifrost.MCPManager != nil {
-		mcpSpan := bifrost.startCoreSpan(ctx, "miscellaneous")
-		req = bifrost.MCPManager.AddToolsToRequest(ctx, req)
-		bifrost.endCoreSpan(mcpSpan)
-	}
-
 	tracer := bifrost.getTracer()
 	if tracer == nil {
 		bifrostErr := newBifrostErrorFromMsg("tracer not found in context")
@@ -5971,6 +5962,13 @@ func (bifrost *Bifrost) tryStreamRequest(ctx *schemas.BifrostContext, req *schem
 		bifrostErr := newBifrostErrorFromMsg("bifrost request after plugin hooks cannot be nil")
 		bifrostErr.PopulateExtraFields(req.RequestType, provider, model, model)
 		return nil, bifrostErr
+	}
+
+	// Add MCP tools after governance has stamped the VK's tool grants on the context.
+	if req.RequestType != schemas.SpeechStreamRequest && req.RequestType != schemas.TranscriptionStreamRequest && bifrost.MCPManager != nil {
+		mcpSpan := bifrost.startCoreSpan(ctx, "miscellaneous")
+		preReq = bifrost.MCPManager.AddToolsToRequest(ctx, preReq)
+		bifrost.endCoreSpan(mcpSpan)
 	}
 
 	// "miscellaneous" phase: field re-read + channel-message setup before enqueue.
