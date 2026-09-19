@@ -191,8 +191,10 @@ func jsonToOpenAISSE(msg map[string]interface{}) []byte {
 		finishReason := choice["finish_reason"]
 
 		var text string
+		var reasoning string
 		if message != nil {
 			text, _ = message["content"].(string)
+			reasoning, _ = message["reasoning_content"].(string)
 		}
 
 		chunk := map[string]interface{}{
@@ -210,6 +212,18 @@ func jsonToOpenAISSE(msg map[string]interface{}) []byte {
 		b.WriteString("data: ")
 		b.Write(payload)
 		b.WriteString("\n\n")
+
+		if reasoning != "" {
+			chunk["choices"] = []interface{}{map[string]interface{}{
+				"index":         0,
+				"delta":         map[string]interface{}{"reasoning_content": reasoning},
+				"finish_reason": nil,
+			}}
+			payload, _ = json.Marshal(chunk)
+			b.WriteString("data: ")
+			b.Write(payload)
+			b.WriteString("\n\n")
+		}
 
 		if text != "" {
 			chunk["choices"] = []interface{}{map[string]interface{}{
