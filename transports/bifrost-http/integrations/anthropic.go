@@ -525,7 +525,7 @@ func collectAnthropicRawContentBlockPaths(paths *[]string, block gjson.Result, p
 
 // shouldUsePassthrough checks if the request should be sent to the passthrough endpoint.
 func shouldUsePassthrough(ctx *schemas.BifrostContext, provider schemas.ModelProvider, model string, alias string) bool {
-	return anthropic.IsClaudeCodeRequest(ctx) && isClaudeModel(ctx, model, alias, string(provider))
+	return isClaudeModel(ctx, model, alias, string(provider))
 }
 
 // serverToolSynthesizesResultBlock reports whether an item's output_item.done

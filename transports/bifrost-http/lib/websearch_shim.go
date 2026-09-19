@@ -31,9 +31,6 @@ func StreamingShimMiddleware() schemas.BifrostHTTPMiddleware {
 			}
 
 			origStream, _ := req["stream"].(bool)
-			if origStream {
-				req["stream"] = false
-			}
 
 			const noAgentBrowser = "\n\nIMPORTANT: Do NOT use the agent_browser tool for web searches. Use web_search or web_fetch instead."
 			switch sys := req["system"].(type) {
