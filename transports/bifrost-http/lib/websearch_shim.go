@@ -268,7 +268,6 @@ func jsonToOpenAISSE(msg map[string]interface{}) []byte {
 }
 
 func isInferencePath(path string) bool {
-	return strings.Contains(path, "/chat/completions") ||
-		strings.HasSuffix(path, "/messages") ||
+	return strings.HasSuffix(path, "/messages") ||
 		strings.HasSuffix(path, "/messages/")
 }
