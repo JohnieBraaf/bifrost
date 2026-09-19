@@ -453,10 +453,10 @@ func ConvertToBifrostContext(ctx *fasthttp.RequestCtx, store HandlerStore) (*sch
 		}
 		if keyStr == "authorization" {
 			valueStr := string(value)
-			// Only accept Bearer token format: "Bearer ..."
+			// Accept any non-empty Bearer token as a virtual key
 			if strings.HasPrefix(strings.ToLower(valueStr), "bearer ") {
 				authHeaderValue := strings.TrimSpace(valueStr[7:]) // Remove "Bearer " prefix
-				if authHeaderValue != "" && strings.HasPrefix(strings.ToLower(authHeaderValue), governance.VirtualKeyPrefix) {
+				if authHeaderValue != "" {
 					bifrostCtx.SetValue(schemas.BifrostContextKeyVirtualKey, authHeaderValue)
 					return true
 				}

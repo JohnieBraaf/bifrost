@@ -897,7 +897,7 @@ func hasVirtualKeyCredential(ctx *fasthttp.RequestCtx) bool {
 	authHeader := strings.TrimSpace(string(ctx.Request.Header.Peek("Authorization")))
 	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
 		token := strings.TrimSpace(authHeader[7:])
-		if token != "" && strings.HasPrefix(strings.ToLower(token), governance.VirtualKeyPrefix) {
+		if token != "" {
 			return true
 		}
 	}
