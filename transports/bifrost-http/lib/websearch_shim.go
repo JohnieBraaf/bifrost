@@ -48,6 +48,7 @@ func StreamingShimMiddleware() schemas.BifrostHTTPMiddleware {
 }
 
 func isInferencePath(path string) bool {
-	return strings.HasSuffix(path, "/messages") ||
+	return strings.Contains(path, "/chat/completions") ||
+		strings.HasSuffix(path, "/messages") ||
 		strings.HasSuffix(path, "/messages/")
 }
