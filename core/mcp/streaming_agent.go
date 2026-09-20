@@ -277,7 +277,7 @@ func (m *MCPManager) executeToolsParallel(
 func prepareFollowUpContext(ctx *schemas.BifrostContext) {
 	// Propagate the original request ID as parent so follow-up turns
 	// appear as children in the bifrost UI.
-	if reqID, ok := ctx.GetValue(schemas.BifrostContextKeyRequestID).(string); ok && reqID != "" {
+	if reqID, ok := ctx.GetUserValues()[schemas.BifrostContextKeyRequestID].(string); ok && reqID != "" {
 		ctx.SetValue(schemas.BifrostContextKeyParentRequestID, reqID)
 	}
 	ctx.ClearValue(schemas.BifrostContextKeyRequestID) // let bifrost assign a fresh ID for the follow-up
