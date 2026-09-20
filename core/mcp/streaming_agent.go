@@ -528,10 +528,17 @@ func reconstructChatResponseFromStream(chunks []*schemas.BifrostStreamChunk) *sc
 		})
 	}
 
-	content := textBuf.String()
+	// Only include text content when there are no tool_calls or when content is
+	// non-empty. OpenAI/vLLM reject assistant messages with tool_calls that have
+	// an empty-string content field — it must be null/omitted in that case.
+	var msgContent *schemas.ChatMessageContent
+	if textBuf.Len() > 0 {
+		content := textBuf.String()
+		msgContent = &schemas.ChatMessageContent{ContentStr: &content}
+	}
 	msg := &schemas.ChatMessage{
 		Role:    schemas.ChatMessageRoleAssistant,
-		Content: &schemas.ChatMessageContent{ContentStr: &content},
+		Content: msgContent,
 		ChatAssistantMessage: &schemas.ChatAssistantMessage{
 			ToolCalls: tcs,
 		},
