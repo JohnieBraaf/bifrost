@@ -259,16 +259,27 @@ func allowsTool(p schemas.Permit, toolPattern string) bool {
 			continue
 		}
 		handledClients[clientKey] = struct{}{}
-		if toolPattern != clientName+"-"+Wildcard && !strings.HasPrefix(toolPattern, clientName+"-") {
+		// Accept both dash separator ("web-search") and underscore separator ("web_search"),
+		// because bifrost tool names use underscore while grant entries use dash.
+		hasDashPrefix := strings.HasPrefix(toolPattern, clientName+"-")
+		hasUnderscorePrefix := strings.HasPrefix(toolPattern, clientName+"_")
+		if toolPattern != clientName+"-"+Wildcard && toolPattern != clientName+"_"+Wildcard &&
+			!hasDashPrefix && !hasUnderscorePrefix {
 			continue
 		}
-		if toolPattern == clientName+"-"+Wildcard {
+		if toolPattern == clientName+"-"+Wildcard || toolPattern == clientName+"_"+Wildcard {
 			return len(mp.Tools) > 0
 		}
 		if mp.Tools.IsUnrestricted() {
 			return true
 		}
-		return mp.Tools.Contains(strings.TrimPrefix(toolPattern, clientName+"-"))
+		var toolName string
+		if hasDashPrefix {
+			toolName = strings.TrimPrefix(toolPattern, clientName+"-")
+		} else {
+			toolName = strings.TrimPrefix(toolPattern, clientName+"_")
+		}
+		return mp.Tools.Contains(toolName)
 	}
 	return false
 }
