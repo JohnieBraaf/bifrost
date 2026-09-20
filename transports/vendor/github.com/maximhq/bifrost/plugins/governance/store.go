@@ -1433,8 +1433,12 @@ func (gs *LocalGovernanceStore) permitForVirtualKey(ctx context.Context, vk *con
 	// exactly like a config: owns the clients it names, unions per client, blocks allowed-by-default.
 	vmcpIDs := gs.assignedVirtualMCPIDs(vk.ID)
 	acc := NewMCPToolAccumulator(len(vk.MCPConfigs) + len(vmcpIDs))
+	var clientNames map[string]string
+	if gs.inMemoryStore != nil {
+		clientNames = gs.inMemoryStore.GetMCPClientNames()
+	}
 	for i := range vk.MCPConfigs {
-		acc.addMCPConfig(&vk.MCPConfigs[i])
+		acc.addMCPConfig(&vk.MCPConfigs[i], clientNames)
 	}
 	for _, id := range vmcpIDs {
 		def := gs.virtualMCPByID(id)

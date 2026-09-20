@@ -80,15 +80,27 @@ func (acc *MCPToolAccumulator) GrantClientTools(clientID, clientName string, too
 }
 
 // addMCPConfig folds in a key's own config: the client is registered even with no tools, and carries
-// its own name.
-func (acc *MCPToolAccumulator) addMCPConfig(cfg *configstoreTables.TableVirtualKeyMCPConfig) {
+// its own name. clientNames maps client UUID → name so the client ID can be resolved when MCPClient
+// is not preloaded by GORM (ClientID == "").
+func (acc *MCPToolAccumulator) addMCPConfig(cfg *configstoreTables.TableVirtualKeyMCPConfig, clientNames map[string]string) {
 	clientID := cfg.MCPClient.ClientID
+	if clientID == "" && cfg.MCPClientName != "" {
+		// MCPClient was not preloaded — resolve UUID by matching the name.
+		for uuid, name := range clientNames {
+			if name == cfg.MCPClientName {
+				clientID = uuid
+				break
+			}
+		}
+	}
 	if clientID == "" {
 		return
 	}
 	entry := acc.client(clientID)
 	if cfg.MCPClient.Name != "" {
 		entry.name = cfg.MCPClient.Name
+	} else if cfg.MCPClientName != "" {
+		entry.name = cfg.MCPClientName
 	}
 	for _, tool := range cfg.ToolsToExecute {
 		acc.GrantTool(clientID, tool)
