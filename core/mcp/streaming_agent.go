@@ -275,10 +275,13 @@ func (m *MCPManager) executeToolsParallel(
 // It also clears stale stream state from the previous request so the follow-up
 // gets a clean HTTP connection instead of reusing the one vLLM just closed.
 func prepareFollowUpContext(ctx *schemas.BifrostContext) {
+	// Propagate the original request ID as parent so follow-up turns
+	// appear as children in the bifrost UI.
+	if reqID, ok := ctx.GetValue(schemas.BifrostContextKeyRequestID).(string); ok && reqID != "" {
+		ctx.SetValue(schemas.BifrostContextKeyParentRequestID, reqID)
+	}
+	ctx.ClearValue(schemas.BifrostContextKeyRequestID) // let bifrost assign a fresh ID for the follow-up
 	ctx.SetValue(schemas.BifrostContextKeyUseRawRequestBody, false)
-	// Clear stream-lifecycle flags that fasthttp/bifrost set on the previous
-	// connection. Without this, the follow-up sees ConnectionClosed=true and
-	// fasthttp immediately returns ErrConnectionClosed ("stream closed").
 	ctx.ClearValue(schemas.BifrostContextKeyConnectionClosed)
 	ctx.ClearValue(schemas.BifrostContextKeyStreamEndIndicator)
 	ctx.ClearValue(schemas.BifrostContextKeyStreamBodyExhausted)
