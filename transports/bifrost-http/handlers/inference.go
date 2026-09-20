@@ -1895,6 +1895,26 @@ func (h *CompletionHandler) handleStreamingTextCompletion(ctx *fasthttp.RequestC
 	h.handleStreamingResponse(ctx, bifrostCtx, schemas.TextCompletionStreamRequest, getStream, cancel)
 }
 
+// chatStreamWrapper is satisfied at runtime by mcp.MCPManager when the streaming agent loop is compiled in.
+type chatStreamWrapper interface {
+	WrapChatStreamWithAgentLoop(
+		ctx *schemas.BifrostContext,
+		req *schemas.BifrostChatRequest,
+		stream chan *schemas.BifrostStreamChunk,
+		makeStream func(*schemas.BifrostContext, *schemas.BifrostChatRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError),
+	) chan *schemas.BifrostStreamChunk
+}
+
+// responsesStreamWrapper is satisfied at runtime by mcp.MCPManager when the streaming agent loop is compiled in.
+type responsesStreamWrapper interface {
+	WrapResponsesStreamWithAgentLoop(
+		ctx *schemas.BifrostContext,
+		req *schemas.BifrostResponsesRequest,
+		stream chan *schemas.BifrostStreamChunk,
+		makeStream func(*schemas.BifrostContext, *schemas.BifrostResponsesRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError),
+	) chan *schemas.BifrostStreamChunk
+}
+
 // handleStreamingChatCompletion handles streaming chat completion requests using Server-Sent Events (SSE)
 func (h *CompletionHandler) handleStreamingChatCompletion(ctx *fasthttp.RequestCtx, req *schemas.BifrostChatRequest, bifrostCtx *schemas.BifrostContext, cancel context.CancelFunc) {
 	getStream := func() (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
@@ -1902,10 +1922,13 @@ func (h *CompletionHandler) handleStreamingChatCompletion(ctx *fasthttp.RequestC
 		if err != nil {
 			return nil, err
 		}
-		makeStream := func(ctx *schemas.BifrostContext, r *schemas.BifrostChatRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
-			return h.client.ChatCompletionStreamRequest(ctx, r)
+		if w, ok := h.client.MCPManager.(chatStreamWrapper); ok {
+			makeStream := func(ctx *schemas.BifrostContext, r *schemas.BifrostChatRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
+				return h.client.ChatCompletionStreamRequest(ctx, r)
+			}
+			stream = w.WrapChatStreamWithAgentLoop(bifrostCtx, req, stream, makeStream)
 		}
-		return h.client.WrapChatStreamWithAgentLoop(bifrostCtx, req, stream, makeStream), nil
+		return stream, nil
 	}
 	h.handleStreamingResponse(ctx, bifrostCtx, schemas.ChatCompletionStreamRequest, getStream, cancel)
 }
@@ -1927,10 +1950,13 @@ func (h *CompletionHandler) handleStreamingResponses(ctx *fasthttp.RequestCtx, r
 		if err != nil {
 			return nil, err
 		}
-		makeStream := func(ctx *schemas.BifrostContext, r *schemas.BifrostResponsesRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
-			return h.client.ResponsesStreamRequest(ctx, r)
+		if w, ok := h.client.MCPManager.(responsesStreamWrapper); ok {
+			makeStream := func(ctx *schemas.BifrostContext, r *schemas.BifrostResponsesRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
+				return h.client.ResponsesStreamRequest(ctx, r)
+			}
+			stream = w.WrapResponsesStreamWithAgentLoop(bifrostCtx, req, stream, makeStream)
 		}
-		return h.client.WrapResponsesStreamWithAgentLoop(bifrostCtx, req, stream, makeStream), nil
+		return stream, nil
 	}
 	h.handleStreamingResponse(ctx, bifrostCtx, schemas.ResponsesStreamRequest, getStream, cancel)
 }
