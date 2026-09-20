@@ -120,7 +120,7 @@ func (m *MCPManager) runResponsesStreamAgentLoop(
 
 	// Clear passthrough flags so follow-up requests use bifrost's native serialization,
 	// which the route converter will then render into the appropriate wire format.
-	clearPassthroughFlags(ctx)
+	prepareFollowUpContext(ctx)
 
 	followUpStream, bifrostErr := makeStream(ctx, newReq)
 	if bifrostErr != nil {
@@ -202,7 +202,7 @@ func (m *MCPManager) runChatStreamAgentLoop(
 	history = adapter.addToolResults(history, toolResults)
 	newReq := adapter.createNewRequest(history).(*schemas.BifrostChatRequest)
 
-	clearPassthroughFlags(ctx)
+	prepareFollowUpContext(ctx)
 
 	followUpStream, bifrostErr := makeStream(ctx, newReq)
 	if bifrostErr != nil {
@@ -252,13 +252,12 @@ func (m *MCPManager) executeToolsParallel(
 	return results
 }
 
-// clearPassthroughFlags unsets context values that would cause follow-up requests
-// to use raw passthrough mode instead of bifrost's native serialization.
-func clearPassthroughFlags(ctx *schemas.BifrostContext) {
+// prepareFollowUpContext clears only UseRawRequestBody so bifrost serializes
+// the new request body, while preserving SendBackRawResponse, SkipKeySelection,
+// and PassthroughHeaders so kiro-gateway routes follow-up requests with the
+// original OAuth credentials and the response stays in passthrough format.
+func prepareFollowUpContext(ctx *schemas.BifrostContext) {
 	ctx.SetValue(schemas.BifrostContextKeyUseRawRequestBody, false)
-	ctx.SetValue(schemas.BifrostContextKeySendBackRawResponse, false)
-	ctx.SetValue(schemas.BifrostContextKeyPassthroughOverridesPresent, false)
-	ctx.SetValue(schemas.BifrostContextKeySkipKeySelection, false)
 }
 
 // extractToolCallsFromResponsesStream extracts all tool calls from a buffered

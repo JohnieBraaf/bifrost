@@ -1936,16 +1936,6 @@ func (h *CompletionHandler) handleStreamingChatCompletion(ctx *fasthttp.RequestC
 // handleStreamingResponses handles streaming responses requests using Server-Sent Events (SSE)
 func (h *CompletionHandler) handleStreamingResponses(ctx *fasthttp.RequestCtx, req *schemas.BifrostResponsesRequest, bifrostCtx *schemas.BifrostContext, cancel context.CancelFunc) {
 	getStream := func() (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
-		// Disable passthrough when MCP is configured so tool definitions are
-		// included in the serialized request. Preserve passthrough for
-		// OAuth/native mode (SkipKeySelection signals that path).
-		if h.client.MCPManager != nil {
-			if skip, _ := bifrostCtx.Value(schemas.BifrostContextKeySkipKeySelection).(bool); !skip {
-				bifrostCtx.SetValue(schemas.BifrostContextKeyUseRawRequestBody, false)
-				bifrostCtx.SetValue(schemas.BifrostContextKeySendBackRawResponse, false)
-				bifrostCtx.SetValue(schemas.BifrostContextKeyPassthroughOverridesPresent, false)
-			}
-		}
 		stream, err := h.client.ResponsesStreamRequest(bifrostCtx, req)
 		if err != nil {
 			return nil, err
