@@ -150,24 +150,39 @@ func (m *MCPManager) runChatStreamAgentLoop(
 	out chan *schemas.BifrostStreamChunk,
 	depth, maxDepth int,
 ) {
-	var buf []*schemas.BifrostStreamChunk
+	// toolBuf holds only tool_call delta chunks — the ones that carry function
+	// call payloads we may need to execute. Everything else (content, reasoning,
+	// finish_reason, usage, empty deltas) is forwarded to out immediately so the
+	// client sees a live stream with no artificial delays.
+	var toolBuf []*schemas.BifrostStreamChunk
+	hasToolCalls := false
+
 	for chunk := range stream {
 		if chunk == nil {
 			continue
 		}
-		if chatChunkNeedsBuffering(chunk) {
-			buf = append(buf, chunk)
+		if chatChunkHasToolCalls(chunk) {
+			// Buffer tool_call delta chunks; we need them to reconstruct the
+			// call after the stream ends but must not forward them to the
+			// client (transparent tool execution).
+			toolBuf = append(toolBuf, chunk)
+			hasToolCalls = true
 		} else {
 			out <- chunk
 		}
 	}
 
-	toolCalls := extractToolCallsFromChatStream(buf)
+	if !hasToolCalls || depth >= maxDepth {
+		// No tool calls (or depth limit) — client already received everything.
+		return
+	}
+
+	// Reconstruct what the assistant "said" from the tool_call chunks so we
+	// can build the follow-up context correctly.
+	toolCalls := extractToolCallsFromChatStream(toolBuf)
 
 	if len(toolCalls) == 0 || depth >= maxDepth {
-		for _, chunk := range buf {
-			out <- chunk
-		}
+		// Client already received everything; nothing left to replay.
 		return
 	}
 
@@ -186,15 +201,13 @@ func (m *MCPManager) runChatStreamAgentLoop(
 	}
 
 	if len(autoExec) == 0 {
-		for _, chunk := range buf {
-			out <- chunk
-		}
+		// No auto-executable tools; client already has the stream, nothing to do.
 		return
 	}
 
 	toolResults := m.executeToolsParallel(ctx, autoExec)
 
-	fakeResp := reconstructChatResponseFromStream(buf)
+	fakeResp := reconstructChatResponseFromStream(toolBuf)
 	adapter := &chatAPIAdapter{
 		originalReq:     req,
 		initialResponse: fakeResp,
@@ -271,18 +284,13 @@ func prepareFollowUpContext(ctx *schemas.BifrostContext) {
 	ctx.ClearValue(schemas.BifrostContextKeyStreamBodyExhausted)
 }
 
-// chatChunkNeedsBuffering returns true for chunks that must be buffered to
-// detect tool calls: those carrying tool_calls deltas, a finish_reason, or
-// non-chat payloads (error chunks, passthrough). Everything else — reasoning,
-// content, empty deltas — can be forwarded immediately for live streaming.
-func chatChunkNeedsBuffering(chunk *schemas.BifrostStreamChunk) bool {
+// chatChunkHasToolCalls returns true if the chunk carries tool_call deltas
+// that need to be buffered for transparent MCP execution.
+func chatChunkHasToolCalls(chunk *schemas.BifrostStreamChunk) bool {
 	if chunk.BifrostChatResponse == nil {
-		return true
+		return false
 	}
 	for _, choice := range chunk.BifrostChatResponse.Choices {
-		if choice.FinishReason != nil {
-			return true
-		}
 		if choice.ChatStreamResponseChoice != nil &&
 			choice.ChatStreamResponseChoice.Delta != nil &&
 			len(choice.ChatStreamResponseChoice.Delta.ToolCalls) > 0 {
