@@ -3031,6 +3031,34 @@ func (bifrost *Bifrost) ExecuteResponsesMCPTool(ctx *schemas.BifrostContext, too
 	return bifrost.MCPManager.ExecuteResponsesTool(ctx, toolCall)
 }
 
+// WrapChatStreamWithAgentLoop wraps a Chat Completions stream with transparent MCP
+// tool-call execution. Returns the unwrapped stream if MCP is not configured.
+func (bifrost *Bifrost) WrapChatStreamWithAgentLoop(
+	ctx *schemas.BifrostContext,
+	originalReq *schemas.BifrostChatRequest,
+	initialStream chan *schemas.BifrostStreamChunk,
+	makeStream func(*schemas.BifrostContext, *schemas.BifrostChatRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError),
+) chan *schemas.BifrostStreamChunk {
+	if bifrost.MCPManager == nil {
+		return initialStream
+	}
+	return bifrost.MCPManager.WrapChatStreamWithAgentLoop(ctx, originalReq, initialStream, makeStream)
+}
+
+// WrapResponsesStreamWithAgentLoop wraps a Responses API stream with transparent MCP
+// tool-call execution. Returns the unwrapped stream if MCP is not configured.
+func (bifrost *Bifrost) WrapResponsesStreamWithAgentLoop(
+	ctx *schemas.BifrostContext,
+	originalReq *schemas.BifrostResponsesRequest,
+	initialStream chan *schemas.BifrostStreamChunk,
+	makeStream func(*schemas.BifrostContext, *schemas.BifrostResponsesRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError),
+) chan *schemas.BifrostStreamChunk {
+	if bifrost.MCPManager == nil {
+		return initialStream
+	}
+	return bifrost.MCPManager.WrapResponsesStreamWithAgentLoop(ctx, originalReq, initialStream, makeStream)
+}
+
 // ContainerCreateRequest creates a new container.
 func (bifrost *Bifrost) ContainerCreateRequest(ctx *schemas.BifrostContext, req *schemas.BifrostContainerCreateRequest) (*schemas.BifrostContainerCreateResponse, *schemas.BifrostError) {
 	if req == nil {

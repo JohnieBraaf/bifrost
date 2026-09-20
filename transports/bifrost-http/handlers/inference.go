@@ -1897,25 +1897,41 @@ func (h *CompletionHandler) handleStreamingTextCompletion(ctx *fasthttp.RequestC
 
 // handleStreamingChatCompletion handles streaming chat completion requests using Server-Sent Events (SSE)
 func (h *CompletionHandler) handleStreamingChatCompletion(ctx *fasthttp.RequestCtx, req *schemas.BifrostChatRequest, bifrostCtx *schemas.BifrostContext, cancel context.CancelFunc) {
-	// Use the cancellable context from ConvertToBifrostContext
-	// See router.go for detailed explanation of why we need a cancellable context
-
 	getStream := func() (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
-		return h.client.ChatCompletionStreamRequest(bifrostCtx, req)
+		stream, err := h.client.ChatCompletionStreamRequest(bifrostCtx, req)
+		if err != nil {
+			return nil, err
+		}
+		makeStream := func(ctx *schemas.BifrostContext, r *schemas.BifrostChatRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
+			return h.client.ChatCompletionStreamRequest(ctx, r)
+		}
+		return h.client.WrapChatStreamWithAgentLoop(bifrostCtx, req, stream, makeStream), nil
 	}
-
 	h.handleStreamingResponse(ctx, bifrostCtx, schemas.ChatCompletionStreamRequest, getStream, cancel)
 }
 
 // handleStreamingResponses handles streaming responses requests using Server-Sent Events (SSE)
 func (h *CompletionHandler) handleStreamingResponses(ctx *fasthttp.RequestCtx, req *schemas.BifrostResponsesRequest, bifrostCtx *schemas.BifrostContext, cancel context.CancelFunc) {
-	// Use the cancellable context from ConvertToBifrostContext
-	// See router.go for detailed explanation of why we need a cancellable context
-
 	getStream := func() (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
-		return h.client.ResponsesStreamRequest(bifrostCtx, req)
+		// Disable passthrough when MCP is configured so tool definitions are
+		// included in the serialized request. Preserve passthrough for
+		// OAuth/native mode (SkipKeySelection signals that path).
+		if h.client.MCPManager != nil {
+			if skip, _ := bifrostCtx.Value(schemas.BifrostContextKeySkipKeySelection).(bool); !skip {
+				bifrostCtx.SetValue(schemas.BifrostContextKeyUseRawRequestBody, false)
+				bifrostCtx.SetValue(schemas.BifrostContextKeySendBackRawResponse, false)
+				bifrostCtx.SetValue(schemas.BifrostContextKeyPassthroughOverridesPresent, false)
+			}
+		}
+		stream, err := h.client.ResponsesStreamRequest(bifrostCtx, req)
+		if err != nil {
+			return nil, err
+		}
+		makeStream := func(ctx *schemas.BifrostContext, r *schemas.BifrostResponsesRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
+			return h.client.ResponsesStreamRequest(ctx, r)
+		}
+		return h.client.WrapResponsesStreamWithAgentLoop(bifrostCtx, req, stream, makeStream), nil
 	}
-
 	h.handleStreamingResponse(ctx, bifrostCtx, schemas.ResponsesStreamRequest, getStream, cancel)
 }
 

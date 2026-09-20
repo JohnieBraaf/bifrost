@@ -643,9 +643,11 @@ func shouldSkipToolForRequest(ctx context.Context, clientName, toolName string) 
 	if includeTools != nil {
 		// Try []string first (preferred type)
 		if includeToolsList, ok := includeTools.([]string); ok {
-			// Handle empty array [] - means no tools are included
+			// Handle empty array [] — governance stamps this when no explicit grants exist,
+			// but allow_by_default clients should still inject. Treat empty the same as
+			// nil (no filter) so auto-inject continues to work in our fork.
 			if len(includeToolsList) == 0 {
-				return true // No tools allowed
+				return false
 			}
 
 			// Handle wildcard: canonical format is "clientName-*" (dash), also accept "clientName_*" (underscore)

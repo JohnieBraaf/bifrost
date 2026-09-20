@@ -30,6 +30,25 @@ type MCPManagerInterface interface {
 	UpdateToolSyncInterval(interval time.Duration)
 
 	// Agent Mode Operations
+	// WrapChatStreamWithAgentLoop wraps a Chat Completions stream with transparent
+	// MCP tool-call execution. Tool turns are buffered; the final text-only turn
+	// streams directly to the returned channel.
+	WrapChatStreamWithAgentLoop(
+		ctx *schemas.BifrostContext,
+		originalReq *schemas.BifrostChatRequest,
+		initialStream chan *schemas.BifrostStreamChunk,
+		makeStream func(*schemas.BifrostContext, *schemas.BifrostChatRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError),
+	) chan *schemas.BifrostStreamChunk
+
+	// WrapResponsesStreamWithAgentLoop wraps a Responses API stream with transparent
+	// MCP tool-call execution.
+	WrapResponsesStreamWithAgentLoop(
+		ctx *schemas.BifrostContext,
+		originalReq *schemas.BifrostResponsesRequest,
+		initialStream chan *schemas.BifrostStreamChunk,
+		makeStream func(*schemas.BifrostContext, *schemas.BifrostResponsesRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError),
+	) chan *schemas.BifrostStreamChunk
+
 	// CheckAndExecuteAgentForChatRequest handles agent mode for Chat Completions API.
 	// Tool executions inside the agent loop go through the plugin gate internally —
 	// callers no longer inject an executeTool function.
