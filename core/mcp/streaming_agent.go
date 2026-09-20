@@ -152,9 +152,16 @@ func (m *MCPManager) runChatStreamAgentLoop(
 ) {
 	var buf []*schemas.BifrostStreamChunk
 	for chunk := range stream {
-		if chunk != nil {
-			buf = append(buf, chunk)
+		if chunk == nil {
+			continue
 		}
+		// Reasoning-only chunks can never contain tool calls — pass them
+		// through immediately so the client sees thinking tokens in real time.
+		if isChatReasoningOnlyChunk(chunk) {
+			out <- chunk
+			continue
+		}
+		buf = append(buf, chunk)
 	}
 
 	toolCalls := extractToolCallsFromChatStream(buf)
@@ -264,6 +271,31 @@ func prepareFollowUpContext(ctx *schemas.BifrostContext) {
 	ctx.ClearValue(schemas.BifrostContextKeyConnectionClosed)
 	ctx.ClearValue(schemas.BifrostContextKeyStreamEndIndicator)
 	ctx.ClearValue(schemas.BifrostContextKeyStreamBodyExhausted)
+}
+
+// isChatReasoningOnlyChunk returns true for chunks that carry only reasoning
+// tokens and no content, tool calls, or finish reason. These can never trigger
+// tool execution and should be forwarded immediately rather than buffered.
+func isChatReasoningOnlyChunk(chunk *schemas.BifrostStreamChunk) bool {
+	if chunk.BifrostChatResponse == nil {
+		return false
+	}
+	for _, choice := range chunk.BifrostChatResponse.Choices {
+		if choice.FinishReason != nil {
+			return false
+		}
+		if choice.ChatStreamResponseChoice == nil || choice.ChatStreamResponseChoice.Delta == nil {
+			return false
+		}
+		delta := choice.ChatStreamResponseChoice.Delta
+		hasReasoning := delta.Reasoning != nil && *delta.Reasoning != ""
+		hasContent := delta.Content != nil && *delta.Content != ""
+		hasToolCalls := len(delta.ToolCalls) > 0
+		if !hasReasoning || hasContent || hasToolCalls {
+			return false
+		}
+	}
+	return len(chunk.BifrostChatResponse.Choices) > 0
 }
 
 // extractToolCallsFromResponsesStream extracts all tool calls from a buffered
