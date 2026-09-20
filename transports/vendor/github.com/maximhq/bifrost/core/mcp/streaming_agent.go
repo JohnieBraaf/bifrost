@@ -155,13 +155,11 @@ func (m *MCPManager) runChatStreamAgentLoop(
 		if chunk == nil {
 			continue
 		}
-		// Reasoning-only chunks can never contain tool calls — pass them
-		// through immediately so the client sees thinking tokens in real time.
-		if isChatReasoningOnlyChunk(chunk) {
+		if chatChunkNeedsBuffering(chunk) {
+			buf = append(buf, chunk)
+		} else {
 			out <- chunk
-			continue
 		}
-		buf = append(buf, chunk)
 	}
 
 	toolCalls := extractToolCallsFromChatStream(buf)
@@ -273,29 +271,25 @@ func prepareFollowUpContext(ctx *schemas.BifrostContext) {
 	ctx.ClearValue(schemas.BifrostContextKeyStreamBodyExhausted)
 }
 
-// isChatReasoningOnlyChunk returns true for chunks that carry only reasoning
-// tokens and no content, tool calls, or finish reason. These can never trigger
-// tool execution and should be forwarded immediately rather than buffered.
-func isChatReasoningOnlyChunk(chunk *schemas.BifrostStreamChunk) bool {
+// chatChunkNeedsBuffering returns true for chunks that must be buffered to
+// detect tool calls: those carrying tool_calls deltas, a finish_reason, or
+// non-chat payloads (error chunks, passthrough). Everything else — reasoning,
+// content, empty deltas — can be forwarded immediately for live streaming.
+func chatChunkNeedsBuffering(chunk *schemas.BifrostStreamChunk) bool {
 	if chunk.BifrostChatResponse == nil {
-		return false
+		return true
 	}
 	for _, choice := range chunk.BifrostChatResponse.Choices {
 		if choice.FinishReason != nil {
-			return false
+			return true
 		}
-		if choice.ChatStreamResponseChoice == nil || choice.ChatStreamResponseChoice.Delta == nil {
-			return false
-		}
-		delta := choice.ChatStreamResponseChoice.Delta
-		hasReasoning := delta.Reasoning != nil && *delta.Reasoning != ""
-		hasContent := delta.Content != nil && *delta.Content != ""
-		hasToolCalls := len(delta.ToolCalls) > 0
-		if !hasReasoning || hasContent || hasToolCalls {
-			return false
+		if choice.ChatStreamResponseChoice != nil &&
+			choice.ChatStreamResponseChoice.Delta != nil &&
+			len(choice.ChatStreamResponseChoice.Delta.ToolCalls) > 0 {
+			return true
 		}
 	}
-	return len(chunk.BifrostChatResponse.Choices) > 0
+	return false
 }
 
 // extractToolCallsFromResponsesStream extracts all tool calls from a buffered
