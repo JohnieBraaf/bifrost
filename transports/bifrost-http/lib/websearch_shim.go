@@ -41,15 +41,60 @@ var anthropicTools = []interface{}{
 	},
 }
 
+// openaiTools defines web_search and web_fetch in OpenAI's function-calling
+// format for injection into Chat Completions API requests.
+var openaiTools = []interface{}{
+	map[string]interface{}{
+		"type": "function",
+		"function": map[string]interface{}{
+			"name":        "web_search",
+			"description": "Search the web for current information. Use when you need up-to-date data from the internet.",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query": map[string]interface{}{
+						"type":        "string",
+						"description": "Search query",
+					},
+				},
+				"required": []string{"query"},
+			},
+		},
+	},
+	map[string]interface{}{
+		"type": "function",
+		"function": map[string]interface{}{
+			"name":        "web_fetch",
+			"description": "Fetch the content of a URL and return its text.",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"url": map[string]interface{}{
+						"type":        "string",
+						"description": "URL to fetch",
+					},
+				},
+				"required": []string{"url"},
+			},
+		},
+	},
+}
+
 // StreamingShimMiddleware injects web_search and web_fetch tool definitions
-// (in Anthropic-native input_schema format) into the raw body of Anthropic
-// Messages API requests so the tools reach Claude before passthrough forwards
-// the body to kiro-gateway.
+// into the raw body of both Anthropic Messages API and OpenAI Chat Completions
+// requests, using the appropriate format for each API.
 func StreamingShimMiddleware() schemas.BifrostHTTPMiddleware {
 	return func(next fasthttp.RequestHandler) fasthttp.RequestHandler {
 		return func(ctx *fasthttp.RequestCtx) {
 			path := string(ctx.Path())
-			if !isMessagesPath(path) {
+
+			var tools []interface{}
+			switch {
+			case isMessagesPath(path):
+				tools = anthropicTools
+			case isChatCompletionsPath(path):
+				tools = openaiTools
+			default:
 				next(ctx)
 				return
 			}
@@ -63,17 +108,17 @@ func StreamingShimMiddleware() schemas.BifrostHTTPMiddleware {
 
 			existing := toolNamesFromRequest(req)
 			var toAdd []interface{}
-			for _, t := range anthropicTools {
-				tm := t.(map[string]interface{})
-				if !existing[tm["name"].(string)] {
+			for _, t := range tools {
+				name := toolName(t)
+				if name != "" && !existing[name] {
 					toAdd = append(toAdd, t)
 				}
 			}
 
 			if len(toAdd) > 0 {
-				switch tools := req["tools"].(type) {
+				switch existing := req["tools"].(type) {
 				case []interface{}:
-					req["tools"] = append(tools, toAdd...)
+					req["tools"] = append(existing, toAdd...)
 				default:
 					req["tools"] = toAdd
 				}
@@ -88,14 +133,30 @@ func StreamingShimMiddleware() schemas.BifrostHTTPMiddleware {
 	}
 }
 
+// toolName extracts the tool name from either Anthropic format (top-level
+// "name") or OpenAI function format (nested under "function.name").
+func toolName(t interface{}) string {
+	tm, ok := t.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	if name, ok := tm["name"].(string); ok {
+		return name
+	}
+	if fn, ok := tm["function"].(map[string]interface{}); ok {
+		if name, ok := fn["name"].(string); ok {
+			return name
+		}
+	}
+	return ""
+}
+
 func toolNamesFromRequest(req map[string]interface{}) map[string]bool {
 	names := map[string]bool{}
 	tools, _ := req["tools"].([]interface{})
 	for _, t := range tools {
-		if tm, ok := t.(map[string]interface{}); ok {
-			if name, ok := tm["name"].(string); ok {
-				names[name] = true
-			}
+		if name := toolName(t); name != "" {
+			names[name] = true
 		}
 	}
 	return names
@@ -103,4 +164,8 @@ func toolNamesFromRequest(req map[string]interface{}) map[string]bool {
 
 func isMessagesPath(path string) bool {
 	return strings.HasSuffix(path, "/messages") || strings.HasSuffix(path, "/messages/")
+}
+
+func isChatCompletionsPath(path string) bool {
+	return strings.HasSuffix(path, "/chat/completions") || strings.HasSuffix(path, "/chat/completions/")
 }
