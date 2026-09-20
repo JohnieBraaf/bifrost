@@ -368,7 +368,27 @@ func (req *OpenAIChatRequest) MarshalJSON() ([]byte, error) {
 		}
 	}
 
-	return providerUtils.MarshalSorted(aux)
+	jsonBytes, err := providerUtils.MarshalSorted(aux)
+	if err != nil {
+		return nil, err
+	}
+	// Flatten ExtraParams to top-level keys so provider-specific fields like
+	// chat_template_kwargs reach vLLM (and others) at the expected top-level position
+	// rather than nested under "extra_params" which providers don't understand.
+	if len(req.ExtraParams) == 0 {
+		return jsonBytes, nil
+	}
+	var base map[string]interface{}
+	if err := sonic.Unmarshal(jsonBytes, &base); err != nil {
+		return nil, err
+	}
+	delete(base, "extra_params")
+	for k, v := range req.ExtraParams {
+		if _, exists := base[k]; !exists {
+			base[k] = v
+		}
+	}
+	return providerUtils.MarshalSorted(base)
 }
 
 // UnmarshalJSON implements custom JSON unmarshalling for OpenAIChatRequest.
