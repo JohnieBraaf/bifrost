@@ -92,6 +92,11 @@ func (acc *MCPToolAccumulator) addMCPConfig(cfg *configstoreTables.TableVirtualK
 				break
 			}
 		}
+		// UUID may be empty (client record exists but ClientID field not populated).
+		// Fall back to using the name itself as the accumulator key.
+		if clientID == "" {
+			clientID = cfg.MCPClientName
+		}
 	}
 	if clientID == "" {
 		return
