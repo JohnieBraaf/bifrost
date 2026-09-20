@@ -1,0 +1,301 @@
+package fasthttpproxy
+
+import (
+	"bufio"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"net"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/valyala/fasthttp"
+	"golang.org/x/net/http/httpproxy"
+	"golang.org/x/net/proxy"
+)
+
+var (
+	colonTLSPort = ":443"
+	tmpURL       = &url.URL{Scheme: httpsScheme, Host: "example.com"}
+)
+
+func dialFuncOrError(dialFunc fasthttp.DialFunc, err error) fasthttp.DialFunc {
+	if err == nil {
+		return dialFunc
+	}
+	return func(addr string) (net.Conn, error) {
+		return nil, err
+	}
+}
+
+// Dialer embeds both fasthttp.TCPDialer and httpproxy.Config, allowing it
+// to take advantage of the optimizations provided by fasthttp for dialing while also
+// utilizing the finer-grained configuration options offered by httpproxy.
+type Dialer struct {
+	fasthttp.TCPDialer
+	// Support HTTPProxy, HTTPSProxy and NoProxy configuration.
+	//
+	// HTTPProxy represents the value of the HTTP_PROXY or
+	// http_proxy environment variable. It will be used as the proxy
+	// URL for HTTP requests unless overridden by NoProxy.
+	//
+	// HTTPSProxy represents the HTTPS_PROXY or https_proxy
+	// environment variable. It will be used as the proxy URL for
+	// HTTPS requests unless overridden by NoProxy.
+	//
+	// NoProxy represents the NO_PROXY or no_proxy environment
+	// variable. It specifies a string that contains comma-separated values
+	// specifying hosts that should be excluded from proxying. Each value is
+	// represented by an IP address prefix (1.2.3.4), an IP address prefix in
+	// CIDR notation (1.2.3.4/8), a domain name, or a special DNS label (*).
+	// An IP address prefix and domain name can also include a literal port
+	// number (1.2.3.4:80).
+	// A domain name matches that name and all subdomains. A domain name with
+	// a leading "." matches subdomains only. For example "foo.com" matches
+	// "foo.com" and "bar.foo.com"; ".y.com" matches "x.y.com" but not "y.com".
+	// A single asterisk (*) indicates that no proxying should be done.
+	// A best effort is made to parse the string and errors are
+	// ignored.
+	httpproxy.Config
+
+	// Attempt to connect to both ipv4 and ipv6 addresses if set to true.
+	// By default, dial only to ipv4 addresses,
+	// since unfortunately ipv6 remains broken in many networks worldwide :)
+	//
+	// This field from the fasthttp client is provided redundantly here because
+	// when we customize the Dial function for the client, its DialDualStack field
+	// configuration becomes ineffective.
+	DialDualStack bool
+	// Dial timeout.
+	//
+	// This field from the fasthttp client is provided redundantly here because
+	// when we customize the Dial function for the client, its DialTimeout field
+	// configuration becomes ineffective.
+	Timeout time.Duration
+	// The timeout for sending a CONNECT request when using an HTTP proxy.
+	ConnectTimeout time.Duration
+}
+
+// GetDialFunc method returns a fasthttp-style dial function. The useEnv parameter
+// determines whether the proxy address comes from Dialer.Config or from environment variables.
+//
+// The returned DialFunc cannot observe the request scheme. When HTTPProxy and
+// HTTPSProxy differ, it assumes port 443 is HTTPS and every other port is HTTP.
+// Use GetDialFuncForTLS when the request scheme and port may not use their
+// conventional pairing.
+func (d *Dialer) GetDialFunc(useEnv bool) (fasthttp.DialFunc, error) {
+	return d.getDialFunc(useEnv, "")
+}
+
+// GetDialFuncForTLS returns a fasthttp-style dial function that selects
+// HTTPProxy or HTTPSProxy from isTLS instead of inferring the scheme from the
+// destination port. The isTLS value should match fasthttp.HostClient.IsTLS.
+func (d *Dialer) GetDialFuncForTLS(useEnv, isTLS bool) (fasthttp.DialFunc, error) {
+	scheme := httpScheme
+	if isTLS {
+		scheme = httpsScheme
+	}
+	return d.getDialFunc(useEnv, scheme)
+}
+
+func (d *Dialer) getDialFunc(useEnv bool, scheme string) (fasthttp.DialFunc, error) {
+	config := &d.Config
+	if useEnv {
+		config = httpproxy.FromEnvironment()
+	}
+	proxyURLIsStatic := config.NoProxy == "" &&
+		(scheme != "" || config.HTTPSProxy == config.HTTPProxy)
+	network := "tcp4"
+	if d.DialDualStack {
+		network = "tcp"
+	}
+	proxyFunc := config.ProxyFunc()
+	if proxyURLIsStatic {
+		var proxyURL *url.URL
+		var proxyDialer proxy.Dialer
+		reqURL := tmpURL
+		if scheme != "" {
+			reqURL = &url.URL{Scheme: scheme, Host: tmpURL.Host}
+		}
+		proxyURL, err := proxyFunc(reqURL)
+		if err != nil {
+			return nil, err
+		}
+		if proxyURL == nil {
+			// dial directly
+			return func(addr string) (net.Conn, error) {
+				return d.Dial(network, addr)
+			}, nil
+		}
+		switch proxyURL.Scheme {
+		case "socks5", "socks5h":
+			proxyDialer, err = proxy.FromURL(proxyURL, d)
+			if err != nil {
+				return nil, err
+			}
+		case "http":
+			proxyAddr, auth := addrAndAuth(proxyURL, nil)
+			proxyDialer = DialerFunc(func(network, addr string) (conn net.Conn, err error) {
+				return httpProxyDial(d, network, addr, proxyAddr, auth)
+			})
+		default:
+			return nil, errors.New("proxy: unknown scheme: " + proxyURL.Scheme)
+		}
+		return func(addr string) (net.Conn, error) {
+			return proxyDialer.Dial(network, addr)
+		}, nil
+	}
+	// slow path when the proxyURL changes along with the request URL.
+	var authCache sync.Map
+	return func(addr string) (conn net.Conn, err error) {
+		var proxyDialer proxy.Dialer
+		var proxyURL *url.URL
+		requestScheme := scheme
+		if requestScheme == "" {
+			requestScheme = httpsScheme
+			if !strings.HasSuffix(addr, colonTLSPort) {
+				requestScheme = httpScheme
+			}
+		}
+		reqURL := &url.URL{Host: addr, Scheme: requestScheme}
+		proxyURL, err = proxyFunc(reqURL)
+		if err != nil {
+			return nil, err
+		}
+		if proxyURL == nil {
+			// dial directly
+			return d.Dial(network, addr)
+		}
+		switch proxyURL.Scheme {
+		case "socks5", "socks5h":
+			proxyDialer, err = proxy.FromURL(proxyURL, d)
+			if err != nil {
+				return nil, err
+			}
+		case "http":
+			proxyAddr, auth := addrAndAuth(proxyURL, &authCache)
+			proxyDialer = DialerFunc(func(network, addr string) (conn net.Conn, err error) {
+				return httpProxyDial(d, network, addr, proxyAddr, auth)
+			})
+		default:
+			return nil, errors.New("proxy: unknown scheme: " + proxyURL.Scheme)
+		}
+		return proxyDialer.Dial(network, addr)
+	}, nil
+}
+
+// Dial is solely for implementing the proxy.Dialer interface.
+func (d *Dialer) Dial(network, addr string) (net.Conn, error) {
+	if network == "tcp4" {
+		if d.Timeout > 0 {
+			return d.DialTimeout(addr, d.Timeout)
+		}
+		return d.TCPDialer.Dial(addr)
+	}
+	if network == "tcp" {
+		if d.Timeout > 0 {
+			return d.DialDualStackTimeout(addr, d.Timeout)
+		}
+		return d.TCPDialer.DialDualStack(addr)
+	}
+	err := errors.New("dont support the network: " + network)
+	return nil, err
+}
+
+func (d *Dialer) connectTimeout() time.Duration {
+	return d.ConnectTimeout
+}
+
+// In the httpProxyDial function, the proxy.Dialer that implements
+// this interface can retrieve timeout information when sending the CONNECT
+// method to the HTTP proxy.
+type httpProxyDialer interface {
+	connectTimeout() time.Duration
+}
+
+// DialerFunc Make a function of type func(network, addr string) (net.Conn, error)
+// implement the proxy.Dialer interface.
+type DialerFunc func(network, addr string) (net.Conn, error)
+
+func (d DialerFunc) Dial(network, addr string) (net.Conn, error) {
+	return d(network, addr)
+}
+
+// Establish a connection through an HTTP proxy.
+func httpProxyDial(dialer proxy.Dialer, network, addr, proxyAddr, auth string) (net.Conn, error) {
+	if strings.ContainsAny(addr, "\r\n") {
+		return nil, fmt.Errorf("proxy dial target address contains cr or lf: %q", addr)
+	}
+
+	conn, err := dialer.Dial(network, proxyAddr)
+	if err != nil {
+		return nil, err
+	}
+	var connectTimeout time.Duration
+	hp, ok := dialer.(httpProxyDialer)
+	if ok {
+		connectTimeout = hp.connectTimeout()
+	}
+
+	if connectTimeout > 0 {
+		if err = conn.SetDeadline(time.Now().Add(connectTimeout)); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		defer func() {
+			_ = conn.SetDeadline(time.Time{})
+		}()
+	}
+	req := "CONNECT " + addr + " HTTP/1.1\r\nHost: " + addr + "\r\n"
+	if auth != "" {
+		req += "Proxy-Authorization: Basic " + auth + "\r\n"
+	}
+	req += "\r\n"
+	_, err = conn.Write([]byte(req))
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	res := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseResponse(res)
+	res.SkipBody = true
+	if err = res.Read(bufio.NewReaderSize(conn, 1024)); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if res.Header.StatusCode() != 200 {
+		_ = conn.Close()
+		err = fmt.Errorf("could not connect to proxy addr: %s status code: %d", proxyAddr, res.Header.StatusCode())
+		return nil, err
+	}
+	return conn, err
+}
+
+// Cache authentication information for HTTP proxies.
+type proxyInfo struct {
+	auth string
+	addr string
+}
+
+func addrAndAuth(pu *url.URL, authCache *sync.Map) (proxyAddr, auth string) {
+	if pu.User == nil {
+		proxyAddr = pu.Host + pu.Path
+		return proxyAddr, auth
+	}
+	if authCache != nil {
+		if v, ok := authCache.Load(pu); ok {
+			info := v.(*proxyInfo) //nolint:forcetypeassert
+			return info.addr, info.auth
+		}
+	}
+	info := &proxyInfo{
+		auth: base64.StdEncoding.EncodeToString([]byte(pu.User.String())),
+		addr: pu.Host + pu.Path,
+	}
+	if authCache != nil {
+		authCache.Store(pu, info)
+	}
+	return info.addr, info.auth
+}
