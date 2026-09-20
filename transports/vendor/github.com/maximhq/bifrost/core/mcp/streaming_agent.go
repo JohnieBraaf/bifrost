@@ -253,11 +253,17 @@ func (m *MCPManager) executeToolsParallel(
 }
 
 // prepareFollowUpContext clears only UseRawRequestBody so bifrost serializes
-// the new request body, while preserving SendBackRawResponse, SkipKeySelection,
-// and PassthroughHeaders so kiro-gateway routes follow-up requests with the
-// original OAuth credentials and the response stays in passthrough format.
+// the new request body, while preserving SendBackRawResponse + kiro OAuth headers.
+// It also clears stale stream state from the previous request so the follow-up
+// gets a clean HTTP connection instead of reusing the one vLLM just closed.
 func prepareFollowUpContext(ctx *schemas.BifrostContext) {
 	ctx.SetValue(schemas.BifrostContextKeyUseRawRequestBody, false)
+	// Clear stream-lifecycle flags that fasthttp/bifrost set on the previous
+	// connection. Without this, the follow-up sees ConnectionClosed=true and
+	// fasthttp immediately returns ErrConnectionClosed ("stream closed").
+	ctx.ClearValue(schemas.BifrostContextKeyConnectionClosed)
+	ctx.ClearValue(schemas.BifrostContextKeyStreamEndIndicator)
+	ctx.ClearValue(schemas.BifrostContextKeyStreamBodyExhausted)
 }
 
 // extractToolCallsFromResponsesStream extracts all tool calls from a buffered
