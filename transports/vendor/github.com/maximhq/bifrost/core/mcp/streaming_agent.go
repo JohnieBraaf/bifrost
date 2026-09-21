@@ -182,7 +182,11 @@ func (m *MCPManager) runChatStreamAgentLoop(
 	toolCalls := extractToolCallsFromChatStream(toolBuf)
 
 	if len(toolCalls) == 0 || depth >= maxDepth {
-		// Client already received everything; nothing left to replay.
+		// Can't parse tool calls or depth limit reached — forward buffered chunks
+		// so pi receives the full response and can handle tool calls itself.
+		for _, chunk := range toolBuf {
+			out <- chunk
+		}
 		return
 	}
 
@@ -201,7 +205,10 @@ func (m *MCPManager) runChatStreamAgentLoop(
 	}
 
 	if len(autoExec) == 0 {
-		// No auto-executable tools; client already has the stream, nothing to do.
+		// No MCP-executable tools — forward buffered chunks so pi handles them.
+		for _, chunk := range toolBuf {
+			out <- chunk
+		}
 		return
 	}
 
