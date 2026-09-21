@@ -288,12 +288,17 @@ func prepareFollowUpContext(ctx *schemas.BifrostContext) {
 }
 
 // chatChunkHasToolCalls returns true if the chunk carries tool_call deltas
-// that need to be buffered for transparent MCP execution.
+// or a finish_reason of "tool_calls" that need to be buffered for transparent
+// MCP execution. Pi must never see a tool_calls finish without accompanying
+// tool data — the follow-up stream provides the real finish_reason: stop.
 func chatChunkHasToolCalls(chunk *schemas.BifrostStreamChunk) bool {
 	if chunk.BifrostChatResponse == nil {
 		return false
 	}
 	for _, choice := range chunk.BifrostChatResponse.Choices {
+		if choice.FinishReason != nil && *choice.FinishReason == string(schemas.BifrostFinishReasonToolCalls) {
+			return true
+		}
 		if choice.ChatStreamResponseChoice != nil &&
 			choice.ChatStreamResponseChoice.Delta != nil &&
 			len(choice.ChatStreamResponseChoice.Delta.ToolCalls) > 0 {
