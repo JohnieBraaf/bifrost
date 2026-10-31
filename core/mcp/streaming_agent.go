@@ -308,42 +308,39 @@ func prepareFollowUpContext(ctx *schemas.BifrostContext) {
 	ctx.ClearValue(schemas.BifrostContextKeyStreamBodyExhausted)
 }
 
-// isResponsesThinkingChunk returns true for raw Anthropic SSE passthrough
-// chunks that carry only thinking/reasoning content. These can never contain
-// tool calls and should be forwarded immediately rather than buffered.
+// isResponsesThinkingChunk returns true for Responses API stream chunks that
+// carry only Anthropic thinking/reasoning content — never tool calls.
+// These can be forwarded immediately while still being kept in buf for
+// follow-up context reconstruction (Anthropic requires thinking blocks
+// in the assistant message when tool_use follows).
 func isResponsesThinkingChunk(chunk *schemas.BifrostStreamChunk) bool {
-	if chunk.BifrostPassthroughResponse == nil {
+	if chunk.BifrostResponsesStreamResponse == nil {
 		return false
 	}
-	hasThinking := false
-	hasOther := false
-	for _, line := range strings.Split(string(chunk.BifrostPassthroughResponse.Body), "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
-		if !gjson.Valid(data) {
-			continue
-		}
-		switch gjson.Get(data, "type").String() {
-		case "content_block_start":
-			switch gjson.Get(data, "content_block.type").String() {
-			case "thinking":
-				hasThinking = true
-			case "tool_use", "text":
-				hasOther = true
-			}
-		case "content_block_delta":
-			switch gjson.Get(data, "delta.type").String() {
-			case "thinking_delta":
-				hasThinking = true
-			case "input_json_delta", "text_delta":
-				hasOther = true
-			}
-		}
+	resp := chunk.BifrostResponsesStreamResponse
+
+	// Structured reasoning event types.
+	switch resp.Type {
+	case schemas.ResponsesStreamResponseTypeReasoningSummaryPartAdded,
+		schemas.ResponsesStreamResponseTypeReasoningSummaryPartDone:
+		return true
 	}
-	return hasThinking && !hasOther
+
+	// Raw Anthropic SSE stored in ExtraFields — parse the JSON event.
+	if resp.ExtraFields.RawResponse == nil {
+		return false
+	}
+	raw, ok := resp.ExtraFields.RawResponse.(string)
+	if !ok || !gjson.Valid(raw) {
+		return false
+	}
+	switch gjson.Get(raw, "type").String() {
+	case "content_block_start":
+		return gjson.Get(raw, "content_block.type").String() == "thinking"
+	case "content_block_delta":
+		return gjson.Get(raw, "delta.type").String() == "thinking_delta"
+	}
+	return false
 }
 
 // chatChunkHasToolCalls returns true if the chunk carries tool_call deltas
