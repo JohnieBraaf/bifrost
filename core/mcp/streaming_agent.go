@@ -50,7 +50,42 @@ func (m *MCPManager) WrapChatStreamWithAgentLoop(
 	return out
 }
 
-// runResponsesStreamAgentLoop is the recursive inner loop for the Responses API path.
+// isResponsesToolCallChunk returns true for Responses API stream chunks that
+// carry function/tool-call content. These are withheld from pi when bifrost
+// auto-executes the call so pi never sees a tool-use block it didn't ask for.
+func isResponsesToolCallChunk(chunk *schemas.BifrostStreamChunk) bool {
+	if chunk.BifrostResponsesStreamResponse == nil {
+		return false
+	}
+	resp := chunk.BifrostResponsesStreamResponse
+	switch resp.Type {
+	case schemas.ResponsesStreamResponseTypeFunctionCallArgumentsDelta,
+		schemas.ResponsesStreamResponseTypeFunctionCallArgumentsDone:
+		return true
+	case schemas.ResponsesStreamResponseTypeOutputItemAdded,
+		schemas.ResponsesStreamResponseTypeOutputItemDone:
+		if resp.Item != nil && resp.Item.Type != nil &&
+			*resp.Item.Type == schemas.ResponsesMessageTypeFunctionCall {
+			return true
+		}
+	}
+	if resp.ExtraFields.RawResponse == nil {
+		return false
+	}
+	raw, ok := resp.ExtraFields.RawResponse.(string)
+	if !ok || !gjson.Valid(raw) {
+		return false
+	}
+	switch gjson.Get(raw, "type").String() {
+	case "content_block_start":
+		return gjson.Get(raw, "content_block.type").String() == "tool_use"
+	case "content_block_delta":
+		return gjson.Get(raw, "delta.type").String() == "input_json_delta"
+	}
+	return false
+}
+
+
 func (m *MCPManager) runResponsesStreamAgentLoop(
 	ctx *schemas.BifrostContext,
 	req *schemas.BifrostResponsesRequest,
@@ -59,22 +94,28 @@ func (m *MCPManager) runResponsesStreamAgentLoop(
 	out chan *schemas.BifrostStreamChunk,
 	depth, maxDepth int,
 ) {
-	// Drain the stream into a buffer.
+	// Stream non-tool-call chunks to the client immediately so reasoning and text
+	// tokens appear in real time. Tool-call chunks are withheld until we know
+	// whether bifrost will auto-execute the call (in which case we reconstruct the
+	// assistant turn from buf without ever forwarding the raw tool frames to pi).
 	var buf []*schemas.BifrostStreamChunk
+	forwarded := make(map[*schemas.BifrostStreamChunk]bool)
 	for chunk := range stream {
-		if chunk != nil {
-			buf = append(buf, chunk)
+		if chunk == nil {
+			continue
+		}
+		buf = append(buf, chunk)
+		if !isResponsesToolCallChunk(chunk) {
+			out <- chunk
+			forwarded[chunk] = true
 		}
 	}
 
 	// Extract tool calls from the buffered chunks.
 	toolCalls := extractToolCallsFromResponsesStream(buf)
 
-	// No tool calls or depth limit reached — forward the buffer as a live stream and stop.
+	// No tool calls or depth limit reached — non-tool chunks already streamed, done.
 	if len(toolCalls) == 0 || depth >= maxDepth {
-		for _, chunk := range buf {
-			out <- chunk
-		}
 		return
 	}
 
@@ -93,10 +134,13 @@ func (m *MCPManager) runResponsesStreamAgentLoop(
 		}
 	}
 
-	// If nothing can be auto-executed just forward the buffer as-is.
+	// If nothing can be auto-executed, forward the withheld tool chunks so pi can
+	// handle the tool call natively, then return.
 	if len(autoExec) == 0 {
 		for _, chunk := range buf {
-			out <- chunk
+			if !forwarded[chunk] {
+				out <- chunk
+			}
 		}
 		return
 	}
