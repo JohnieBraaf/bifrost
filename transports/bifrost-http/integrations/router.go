@@ -2679,10 +2679,13 @@ func (g *GenericRouter) handleStreamingRequest(ctx *fasthttp.RequestCtx, config 
 				WrapResponsesStreamWithAgentLoop(ctx *schemas.BifrostContext, req *schemas.BifrostResponsesRequest, stream chan *schemas.BifrostStreamChunk, makeStream func(*schemas.BifrostContext, *schemas.BifrostResponsesRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError)) chan *schemas.BifrostStreamChunk
 			}
 			if w, ok := g.client.MCPManager.(responsesAgentWrapper); ok {
+				log.Printf("[ROUTER] responsesAgentWrapper assertion OK")
 				respReq := bifrostReq.ResponsesRequest
 				stream = w.WrapResponsesStreamWithAgentLoop(bifrostCtx, respReq, stream, func(ctx *schemas.BifrostContext, r *schemas.BifrostResponsesRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
 					return g.client.ResponsesStreamRequest(ctx, r)
 				})
+			} else {
+				log.Printf("[ROUTER] responsesAgentWrapper assertion FAILED")
 			}
 		}
 	} else if bifrostReq.ResponsesRetrieveRequest != nil {
