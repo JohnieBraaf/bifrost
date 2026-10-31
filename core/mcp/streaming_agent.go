@@ -104,6 +104,7 @@ func (m *MCPManager) runResponsesStreamAgentLoop(
 	var buf []*schemas.BifrostStreamChunk
 	forwarded := make(map[*schemas.BifrostStreamChunk]bool)
 	passthroughToolUseIndexes := make(map[int]bool)
+	responsesToolUseIndexes := make(map[int]bool)
 	for chunk := range stream {
 		if chunk == nil {
 			continue
@@ -152,10 +153,42 @@ func (m *MCPManager) runResponsesStreamAgentLoop(
 			}
 			continue
 		}
-		if !isResponsesToolCallChunk(chunk) {
-			out <- chunk
-			forwarded[chunk] = true
+		if isResponsesToolCallChunk(chunk) {
+			// Track tool_use indexes so trailing stop/delta chunks can be suppressed.
+			if resp := chunk.BifrostResponsesStreamResponse; resp != nil && resp.ExtraFields.RawResponse != nil {
+				if raw, ok := resp.ExtraFields.RawResponse.(string); ok && gjson.Valid(raw) {
+					if gjson.Get(raw, "type").String() == "content_block_start" {
+						responsesToolUseIndexes[int(gjson.Get(raw, "index").Int())] = true
+					}
+				}
+			}
+			continue
 		}
+		// Suppress trailing chunks that signal a tool_use turn end — pi would display
+		// <web_search> upon seeing stop_reason=tool_use even after auto-execution.
+		if chunk.BifrostResponsesStreamResponse != nil {
+			resp := chunk.BifrostResponsesStreamResponse
+			if resp.ExtraFields.RawResponse != nil {
+				if raw, ok := resp.ExtraFields.RawResponse.(string); ok && gjson.Valid(raw) {
+					switch gjson.Get(raw, "type").String() {
+					case "content_block_stop":
+						if responsesToolUseIndexes[int(gjson.Get(raw, "index").Int())] {
+							continue
+						}
+					case "message_delta":
+						if gjson.Get(raw, "delta.stop_reason").String() == "tool_use" {
+							continue
+						}
+					case "message_stop":
+						if len(responsesToolUseIndexes) > 0 {
+							continue
+						}
+					}
+				}
+			}
+		}
+		out <- chunk
+		forwarded[chunk] = true
 	}
 
 	// Extract tool calls from the buffered chunks.
