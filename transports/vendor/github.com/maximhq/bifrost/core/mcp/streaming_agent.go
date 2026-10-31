@@ -209,35 +209,6 @@ func (m *MCPManager) runResponsesStreamAgentLoop(
 	// to Anthropic Messages format, causing the tool_result to appear as an orphaned
 	// (empty) user message to Claude. Building directly avoids that conversion path.
 	newReq := cloneResponsesRequest(req)
-	// Strip tools and system from the follow-up so Claude responds naturally with
-	// text — no risk of another tool call and no continuation-signal confusion
-	// from the Johnie system prompt.
-	if newReq.Params != nil {
-		paramsCopy := *newReq.Params
-		paramsCopy.Tools = nil
-		paramsCopy.Instructions = nil
-		if paramsCopy.ExtraParams != nil {
-			extraCopy := make(map[string]interface{}, len(paramsCopy.ExtraParams))
-			for k, v := range paramsCopy.ExtraParams {
-				extraCopy[k] = v
-			}
-			delete(extraCopy, "system")
-			paramsCopy.ExtraParams = extraCopy
-		}
-		newReq.Params = &paramsCopy
-	}
-	// Also filter system/developer messages from Input — they carry the Johnie
-	// system prompt which causes continuation-signal confusion in the follow-up.
-	{
-		filtered := make([]schemas.ResponsesMessage, 0, len(newReq.Input))
-		for _, msg := range newReq.Input {
-			if msg.Role != nil && (*msg.Role == schemas.ResponsesInputMessageRoleSystem || *msg.Role == schemas.ResponsesInputMessageRoleDeveloper) {
-				continue
-			}
-			filtered = append(filtered, msg)
-		}
-		newReq.Input = filtered
-	}
 	fcType := schemas.ResponsesMessageTypeFunctionCall
 	fcRole := schemas.ResponsesInputMessageRoleAssistant
 	fcStatus := "completed"
