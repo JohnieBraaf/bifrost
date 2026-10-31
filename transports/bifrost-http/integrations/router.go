@@ -2672,6 +2672,7 @@ func (g *GenericRouter) handleStreamingRequest(ctx *fasthttp.RequestCtx, config 
 	} else if bifrostReq.ResponsesRequest != nil {
 		requestType = schemas.ResponsesStreamRequest
 		stream, bifrostErr = g.client.ResponsesStreamRequest(bifrostCtx, bifrostReq.ResponsesRequest)
+		log.Printf("[ROUTER] ResponsesRequest stream: err=%v MCPManager=%T", bifrostErr, g.client.MCPManager)
 		if bifrostErr == nil {
 			type responsesAgentWrapper interface {
 				WrapResponsesStreamWithAgentLoop(ctx *schemas.BifrostContext, req *schemas.BifrostResponsesRequest, stream chan *schemas.BifrostStreamChunk, makeStream func(*schemas.BifrostContext, *schemas.BifrostResponsesRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError)) chan *schemas.BifrostStreamChunk
