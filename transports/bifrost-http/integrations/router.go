@@ -2658,9 +2658,31 @@ func (g *GenericRouter) handleStreamingRequest(ctx *fasthttp.RequestCtx, config 
 	} else if bifrostReq.ChatRequest != nil {
 		requestType = schemas.ChatCompletionStreamRequest
 		stream, bifrostErr = g.client.ChatCompletionStreamRequest(bifrostCtx, bifrostReq.ChatRequest)
+		if bifrostErr == nil {
+			type chatAgentWrapper interface {
+				WrapChatStreamWithAgentLoop(ctx *schemas.BifrostContext, req *schemas.BifrostChatRequest, stream chan *schemas.BifrostStreamChunk, makeStream func(*schemas.BifrostContext, *schemas.BifrostChatRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError)) chan *schemas.BifrostStreamChunk
+			}
+			if w, ok := g.client.MCPManager.(chatAgentWrapper); ok {
+				chatReq := bifrostReq.ChatRequest
+				stream = w.WrapChatStreamWithAgentLoop(bifrostCtx, chatReq, stream, func(ctx *schemas.BifrostContext, r *schemas.BifrostChatRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
+					return g.client.ChatCompletionStreamRequest(ctx, r)
+				})
+			}
+		}
 	} else if bifrostReq.ResponsesRequest != nil {
 		requestType = schemas.ResponsesStreamRequest
 		stream, bifrostErr = g.client.ResponsesStreamRequest(bifrostCtx, bifrostReq.ResponsesRequest)
+		if bifrostErr == nil {
+			type responsesAgentWrapper interface {
+				WrapResponsesStreamWithAgentLoop(ctx *schemas.BifrostContext, req *schemas.BifrostResponsesRequest, stream chan *schemas.BifrostStreamChunk, makeStream func(*schemas.BifrostContext, *schemas.BifrostResponsesRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError)) chan *schemas.BifrostStreamChunk
+			}
+			if w, ok := g.client.MCPManager.(responsesAgentWrapper); ok {
+				respReq := bifrostReq.ResponsesRequest
+				stream = w.WrapResponsesStreamWithAgentLoop(bifrostCtx, respReq, stream, func(ctx *schemas.BifrostContext, r *schemas.BifrostResponsesRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
+					return g.client.ResponsesStreamRequest(ctx, r)
+				})
+			}
+		}
 	} else if bifrostReq.ResponsesRetrieveRequest != nil {
 		requestType = schemas.ResponsesRetrieveStreamRequest
 		stream, bifrostErr = g.client.ResponsesRetrieveStreamRequest(bifrostCtx, bifrostReq.ResponsesRetrieveRequest)
