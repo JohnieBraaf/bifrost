@@ -59,12 +59,18 @@ func (m *MCPManager) runResponsesStreamAgentLoop(
 	out chan *schemas.BifrostStreamChunk,
 	depth, maxDepth int,
 ) {
-	// Drain the stream into a buffer.
+	// Drain the stream, forwarding passthrough thinking chunks immediately so
+	// the client sees reasoning tokens in real time (same strategy as Chat path).
 	var buf []*schemas.BifrostStreamChunk
 	for chunk := range stream {
-		if chunk != nil {
-			buf = append(buf, chunk)
+		if chunk == nil {
+			continue
 		}
+		if isPassthroughThinkingChunk(chunk) {
+			out <- chunk
+			continue
+		}
+		buf = append(buf, chunk)
 	}
 
 	// Extract tool calls from the buffered chunks.
@@ -292,6 +298,44 @@ func prepareFollowUpContext(ctx *schemas.BifrostContext) {
 	ctx.ClearValue(schemas.BifrostContextKeyConnectionClosed)
 	ctx.ClearValue(schemas.BifrostContextKeyStreamEndIndicator)
 	ctx.ClearValue(schemas.BifrostContextKeyStreamBodyExhausted)
+}
+
+// isPassthroughThinkingChunk returns true for raw Anthropic SSE passthrough
+// chunks that carry only thinking/reasoning content. These can never contain
+// tool calls and should be forwarded immediately rather than buffered.
+func isPassthroughThinkingChunk(chunk *schemas.BifrostStreamChunk) bool {
+	if chunk.BifrostPassthroughResponse == nil {
+		return false
+	}
+	hasThinking := false
+	hasOther := false
+	for _, line := range strings.Split(string(chunk.BifrostPassthroughResponse.Body), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if !gjson.Valid(data) {
+			continue
+		}
+		switch gjson.Get(data, "type").String() {
+		case "content_block_start":
+			switch gjson.Get(data, "content_block.type").String() {
+			case "thinking":
+				hasThinking = true
+			case "tool_use", "text":
+				hasOther = true
+			}
+		case "content_block_delta":
+			switch gjson.Get(data, "delta.type").String() {
+			case "thinking_delta":
+				hasThinking = true
+			case "input_json_delta", "text_delta":
+				hasOther = true
+			}
+		}
+	}
+	return hasThinking && !hasOther
 }
 
 // chatChunkHasToolCalls returns true if the chunk carries tool_call deltas
