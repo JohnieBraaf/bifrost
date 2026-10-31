@@ -59,33 +59,21 @@ func (m *MCPManager) runResponsesStreamAgentLoop(
 	out chan *schemas.BifrostStreamChunk,
 	depth, maxDepth int,
 ) {
-	// Drain the stream, forwarding passthrough thinking chunks immediately so
-	// the client sees reasoning tokens in real time (same strategy as Chat path).
-	// Chunks are ALWAYS added to buf for correct follow-up context reconstruction
-	// (Anthropic requires thinking blocks in the assistant message).
+	// Drain the stream into a buffer.
 	var buf []*schemas.BifrostStreamChunk
-	alreadyForwarded := map[*schemas.BifrostStreamChunk]bool{}
 	for chunk := range stream {
-		if chunk == nil {
-			continue
+		if chunk != nil {
+			buf = append(buf, chunk)
 		}
-		if isResponsesThinkingChunk(chunk) {
-			out <- chunk
-			alreadyForwarded[chunk] = true
-		}
-		buf = append(buf, chunk)
 	}
 
 	// Extract tool calls from the buffered chunks.
 	toolCalls := extractToolCallsFromResponsesStream(buf)
 
-	// No tool calls or depth limit reached — forward the buffer, skipping
-	// chunks already streamed to the client (thinking chunks forwarded above).
+	// No tool calls or depth limit reached — forward the buffer as a live stream and stop.
 	if len(toolCalls) == 0 || depth >= maxDepth {
 		for _, chunk := range buf {
-			if !alreadyForwarded[chunk] {
-				out <- chunk
-			}
+			out <- chunk
 		}
 		return
 	}
@@ -105,12 +93,10 @@ func (m *MCPManager) runResponsesStreamAgentLoop(
 		}
 	}
 
-	// If nothing can be auto-executed just forward the buffer, skipping already-streamed chunks.
+	// If nothing can be auto-executed just forward the buffer as-is.
 	if len(autoExec) == 0 {
 		for _, chunk := range buf {
-			if !alreadyForwarded[chunk] {
-				out <- chunk
-			}
+			out <- chunk
 		}
 		return
 	}
@@ -164,41 +150,17 @@ func (m *MCPManager) runChatStreamAgentLoop(
 	out chan *schemas.BifrostStreamChunk,
 	depth, maxDepth int,
 ) {
-	// toolBuf holds only tool_call delta chunks — the ones that carry function
-	// call payloads we may need to execute. Everything else (content, reasoning,
-	// finish_reason, usage, empty deltas) is forwarded to out immediately so the
-	// client sees a live stream with no artificial delays.
-	var toolBuf []*schemas.BifrostStreamChunk
-	hasToolCalls := false
-
+	var buf []*schemas.BifrostStreamChunk
 	for chunk := range stream {
-		if chunk == nil {
-			continue
-		}
-		if chatChunkHasToolCalls(chunk) {
-			// Buffer tool_call delta chunks; we need them to reconstruct the
-			// call after the stream ends but must not forward them to the
-			// client (transparent tool execution).
-			toolBuf = append(toolBuf, chunk)
-			hasToolCalls = true
-		} else {
-			out <- chunk
+		if chunk != nil {
+			buf = append(buf, chunk)
 		}
 	}
 
-	if !hasToolCalls || depth >= maxDepth {
-		// No tool calls (or depth limit) — client already received everything.
-		return
-	}
-
-	// Reconstruct what the assistant "said" from the tool_call chunks so we
-	// can build the follow-up context correctly.
-	toolCalls := extractToolCallsFromChatStream(toolBuf)
+	toolCalls := extractToolCallsFromChatStream(buf)
 
 	if len(toolCalls) == 0 || depth >= maxDepth {
-		// Can't parse tool calls or depth limit reached — forward buffered chunks
-		// so pi receives the full response and can handle tool calls itself.
-		for _, chunk := range toolBuf {
+		for _, chunk := range buf {
 			out <- chunk
 		}
 		return
@@ -219,8 +181,7 @@ func (m *MCPManager) runChatStreamAgentLoop(
 	}
 
 	if len(autoExec) == 0 {
-		// No MCP-executable tools — forward buffered chunks so pi handles them.
-		for _, chunk := range toolBuf {
+		for _, chunk := range buf {
 			out <- chunk
 		}
 		return
@@ -228,7 +189,7 @@ func (m *MCPManager) runChatStreamAgentLoop(
 
 	toolResults := m.executeToolsParallel(ctx, autoExec)
 
-	fakeResp := reconstructChatResponseFromStream(toolBuf)
+	fakeResp := reconstructChatResponseFromStream(buf)
 	adapter := &chatAPIAdapter{
 		originalReq:     req,
 		initialResponse: fakeResp,
@@ -296,72 +257,13 @@ func (m *MCPManager) executeToolsParallel(
 // It also clears stale stream state from the previous request so the follow-up
 // gets a clean HTTP connection instead of reusing the one vLLM just closed.
 func prepareFollowUpContext(ctx *schemas.BifrostContext) {
-	// Propagate the original request ID as parent so follow-up turns
-	// appear as children in the bifrost UI.
-	if reqID, ok := ctx.GetUserValues()[schemas.BifrostContextKeyRequestID].(string); ok && reqID != "" {
-		ctx.SetValue(schemas.BifrostContextKeyParentRequestID, reqID)
-	}
-	ctx.ClearValue(schemas.BifrostContextKeyRequestID) // let bifrost assign a fresh ID for the follow-up
 	ctx.SetValue(schemas.BifrostContextKeyUseRawRequestBody, false)
+	// Clear stream-lifecycle flags that fasthttp/bifrost set on the previous
+	// connection. Without this, the follow-up sees ConnectionClosed=true and
+	// fasthttp immediately returns ErrConnectionClosed ("stream closed").
 	ctx.ClearValue(schemas.BifrostContextKeyConnectionClosed)
 	ctx.ClearValue(schemas.BifrostContextKeyStreamEndIndicator)
 	ctx.ClearValue(schemas.BifrostContextKeyStreamBodyExhausted)
-}
-
-// isResponsesThinkingChunk returns true for Responses API stream chunks that
-// carry only Anthropic thinking/reasoning content — never tool calls.
-// These can be forwarded immediately while still being kept in buf for
-// follow-up context reconstruction (Anthropic requires thinking blocks
-// in the assistant message when tool_use follows).
-func isResponsesThinkingChunk(chunk *schemas.BifrostStreamChunk) bool {
-	if chunk.BifrostResponsesStreamResponse == nil {
-		return false
-	}
-	resp := chunk.BifrostResponsesStreamResponse
-
-	// Structured reasoning event types.
-	switch resp.Type {
-	case schemas.ResponsesStreamResponseTypeReasoningSummaryPartAdded,
-		schemas.ResponsesStreamResponseTypeReasoningSummaryPartDone:
-		return true
-	}
-
-	// Raw Anthropic SSE stored in ExtraFields — parse the JSON event.
-	if resp.ExtraFields.RawResponse == nil {
-		return false
-	}
-	raw, ok := resp.ExtraFields.RawResponse.(string)
-	if !ok || !gjson.Valid(raw) {
-		return false
-	}
-	switch gjson.Get(raw, "type").String() {
-	case "content_block_start":
-		return gjson.Get(raw, "content_block.type").String() == "thinking"
-	case "content_block_delta":
-		return gjson.Get(raw, "delta.type").String() == "thinking_delta"
-	}
-	return false
-}
-
-// chatChunkHasToolCalls returns true if the chunk carries tool_call deltas
-// or a finish_reason of "tool_calls" that need to be buffered for transparent
-// MCP execution. Pi must never see a tool_calls finish without accompanying
-// tool data — the follow-up stream provides the real finish_reason: stop.
-func chatChunkHasToolCalls(chunk *schemas.BifrostStreamChunk) bool {
-	if chunk.BifrostChatResponse == nil {
-		return false
-	}
-	for _, choice := range chunk.BifrostChatResponse.Choices {
-		if choice.FinishReason != nil && *choice.FinishReason == string(schemas.BifrostFinishReasonToolCalls) {
-			return true
-		}
-		if choice.ChatStreamResponseChoice != nil &&
-			choice.ChatStreamResponseChoice.Delta != nil &&
-			len(choice.ChatStreamResponseChoice.Delta.ToolCalls) > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 // extractToolCallsFromResponsesStream extracts all tool calls from a buffered
