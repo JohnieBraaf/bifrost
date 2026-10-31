@@ -204,19 +204,35 @@ func (m *MCPManager) runResponsesStreamAgentLoop(
 	// Execute auto-executable tools in parallel.
 	toolResults := m.executeToolsParallel(ctx, autoExec)
 
-	// Build follow-up request using the Responses adapter helpers.
-	fakeResp := reconstructResponsesResponseFromStream(buf)
-	adapter := &responsesAPIAdapter{
-		originalReq:     req,
-		initialResponse: fakeResp,
-		makeReq: func(_ *schemas.BifrostContext, _ *schemas.BifrostResponsesRequest) (*schemas.BifrostResponsesResponse, *schemas.BifrostError) {
-			return nil, nil
-		},
+	// Build follow-up request directly: clone original + append tool_use + tool_result.
+	// The Responses API adapter round-trip corrupts message IDs when serialising back
+	// to Anthropic Messages format, causing the tool_result to appear as an orphaned
+	// (empty) user message to Claude. Building directly avoids that conversion path.
+	newReq := cloneResponsesRequest(req)
+	fcType := schemas.ResponsesMessageTypeFunctionCall
+	fcRole := schemas.ResponsesInputMessageRoleAssistant
+	fcStatus := "completed"
+	for _, tc := range autoExec {
+		if tc.Function.Name == nil || tc.ID == nil {
+			continue
+		}
+		newReq.Input = append(newReq.Input, schemas.ResponsesMessage{
+			ID:     tc.ID,
+			Type:   &fcType,
+			Role:   &fcRole,
+			Status: &fcStatus,
+			ResponsesToolMessage: &schemas.ResponsesToolMessage{
+				CallID:    tc.ID,
+				Name:      tc.Function.Name,
+				Arguments: schemas.Ptr(tc.Function.Arguments),
+			},
+		})
 	}
-	history := adapter.getConversationHistory()
-	history = adapter.addAssistantMessage(history, fakeResp)
-	history = adapter.addToolResults(history, toolResults)
-	newReq := adapter.createNewRequest(history).(*schemas.BifrostResponsesRequest)
+	for _, toolResult := range toolResults {
+		for _, rm := range toolResult.ToResponsesMessages() {
+			newReq.Input = append(newReq.Input, rm)
+		}
+	}
 
 	// Clear passthrough flags so follow-up requests use bifrost's native serialization,
 	// which the route converter will then render into the appropriate wire format.
