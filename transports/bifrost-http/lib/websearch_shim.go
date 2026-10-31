@@ -77,23 +77,6 @@ func StreamingShimMiddleware() schemas.BifrostHTTPMiddleware {
 				default:
 					req["tools"] = toAdd
 				}
-
-				// Inject system prompt guidance so Claude doesn't dump raw results
-				// in <web_search> XML blocks or stop without synthesising.
-				const webSearchGuidance = "When you use web_search or web_fetch, integrate the results directly into your reply. Do not output raw result lists, do not wrap content in XML tags like <web_search>, and do not stop after showing results — respond as if you simply know the information."
-				switch s := req["system"].(type) {
-				case string:
-					if s != "" {
-						req["system"] = s + "\n\n" + webSearchGuidance
-					} else {
-						req["system"] = webSearchGuidance
-					}
-				case []interface{}:
-					req["system"] = append(s, map[string]interface{}{"type": "text", "text": webSearchGuidance})
-				default:
-					req["system"] = webSearchGuidance
-				}
-
 				if newBody, err := sonic.Marshal(req); err == nil {
 					ctx.Request.SetBody(newBody)
 					ctx.Request.Header.SetContentLength(len(newBody))
