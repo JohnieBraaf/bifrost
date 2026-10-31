@@ -226,6 +226,18 @@ func (m *MCPManager) runResponsesStreamAgentLoop(
 		}
 		newReq.Params = &paramsCopy
 	}
+	// Also filter system/developer messages from Input — they carry the Johnie
+	// system prompt which causes continuation-signal confusion in the follow-up.
+	{
+		filtered := make([]schemas.ResponsesMessage, 0, len(newReq.Input))
+		for _, msg := range newReq.Input {
+			if msg.Role != nil && (*msg.Role == schemas.ResponsesInputMessageRoleSystem || *msg.Role == schemas.ResponsesInputMessageRoleDeveloper) {
+				continue
+			}
+			filtered = append(filtered, msg)
+		}
+		newReq.Input = filtered
+	}
 	fcType := schemas.ResponsesMessageTypeFunctionCall
 	fcRole := schemas.ResponsesInputMessageRoleAssistant
 	fcStatus := "completed"
