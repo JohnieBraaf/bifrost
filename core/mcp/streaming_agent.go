@@ -98,13 +98,60 @@ func (m *MCPManager) runResponsesStreamAgentLoop(
 	// tokens appear in real time. Tool-call chunks are withheld until we know
 	// whether bifrost will auto-execute the call (in which case we reconstruct the
 	// assistant turn from buf without ever forwarding the raw tool frames to pi).
+	//
+	// For passthrough chunks (Anthropic Messages API), we track tool_use block
+	// indexes to correctly identify and withhold all tool-call related events.
 	var buf []*schemas.BifrostStreamChunk
 	forwarded := make(map[*schemas.BifrostStreamChunk]bool)
+	passthroughToolUseIndexes := make(map[int]bool)
 	for chunk := range stream {
 		if chunk == nil {
 			continue
 		}
 		buf = append(buf, chunk)
+		if chunk.BifrostPassthroughResponse != nil {
+			// Passthrough chunk: inspect raw SSE lines to detect tool_use events.
+			isTool := false
+			for _, line := range strings.Split(string(chunk.BifrostPassthroughResponse.Body), "\n") {
+				line = strings.TrimSpace(line)
+				if !strings.HasPrefix(line, "data: ") {
+					continue
+				}
+				data := strings.TrimPrefix(line, "data: ")
+				if !gjson.Valid(data) {
+					continue
+				}
+				switch gjson.Get(data, "type").String() {
+				case "content_block_start":
+					if gjson.Get(data, "content_block.type").String() == "tool_use" {
+						idx := int(gjson.Get(data, "index").Int())
+						passthroughToolUseIndexes[idx] = true
+						isTool = true
+					}
+				case "content_block_delta":
+					if gjson.Get(data, "delta.type").String() == "input_json_delta" {
+						isTool = true
+					}
+				case "content_block_stop":
+					if passthroughToolUseIndexes[int(gjson.Get(data, "index").Int())] {
+						isTool = true
+					}
+				case "message_delta":
+					if gjson.Get(data, "delta.stop_reason").String() == "tool_use" {
+						isTool = true
+					}
+				case "message_stop":
+					if len(passthroughToolUseIndexes) > 0 {
+						isTool = true
+					}
+				}
+			}
+			if !isTool {
+				out <- chunk
+				forwarded[chunk] = true
+			}
+			continue
+		}
 		if !isResponsesToolCallChunk(chunk) {
 			out <- chunk
 			forwarded[chunk] = true
