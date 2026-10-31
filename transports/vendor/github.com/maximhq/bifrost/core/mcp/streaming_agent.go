@@ -61,14 +61,17 @@ func (m *MCPManager) runResponsesStreamAgentLoop(
 ) {
 	// Drain the stream, forwarding passthrough thinking chunks immediately so
 	// the client sees reasoning tokens in real time (same strategy as Chat path).
+	// Chunks are ALWAYS added to buf for correct follow-up context reconstruction
+	// (Anthropic requires thinking blocks in the assistant message).
 	var buf []*schemas.BifrostStreamChunk
+	alreadyForwarded := map[*schemas.BifrostStreamChunk]bool{}
 	for chunk := range stream {
 		if chunk == nil {
 			continue
 		}
-		if isPassthroughThinkingChunk(chunk) {
+		if isResponsesThinkingChunk(chunk) {
 			out <- chunk
-			continue
+			alreadyForwarded[chunk] = true
 		}
 		buf = append(buf, chunk)
 	}
@@ -76,10 +79,13 @@ func (m *MCPManager) runResponsesStreamAgentLoop(
 	// Extract tool calls from the buffered chunks.
 	toolCalls := extractToolCallsFromResponsesStream(buf)
 
-	// No tool calls or depth limit reached — forward the buffer as a live stream and stop.
+	// No tool calls or depth limit reached — forward the buffer, skipping
+	// chunks already streamed to the client (thinking chunks forwarded above).
 	if len(toolCalls) == 0 || depth >= maxDepth {
 		for _, chunk := range buf {
-			out <- chunk
+			if !alreadyForwarded[chunk] {
+				out <- chunk
+			}
 		}
 		return
 	}
@@ -99,10 +105,12 @@ func (m *MCPManager) runResponsesStreamAgentLoop(
 		}
 	}
 
-	// If nothing can be auto-executed just forward the buffer as-is.
+	// If nothing can be auto-executed just forward the buffer, skipping already-streamed chunks.
 	if len(autoExec) == 0 {
 		for _, chunk := range buf {
-			out <- chunk
+			if !alreadyForwarded[chunk] {
+				out <- chunk
+			}
 		}
 		return
 	}
@@ -300,10 +308,10 @@ func prepareFollowUpContext(ctx *schemas.BifrostContext) {
 	ctx.ClearValue(schemas.BifrostContextKeyStreamBodyExhausted)
 }
 
-// isPassthroughThinkingChunk returns true for raw Anthropic SSE passthrough
+// isResponsesThinkingChunk returns true for raw Anthropic SSE passthrough
 // chunks that carry only thinking/reasoning content. These can never contain
 // tool calls and should be forwarded immediately rather than buffered.
-func isPassthroughThinkingChunk(chunk *schemas.BifrostStreamChunk) bool {
+func isResponsesThinkingChunk(chunk *schemas.BifrostStreamChunk) bool {
 	if chunk.BifrostPassthroughResponse == nil {
 		return false
 	}
