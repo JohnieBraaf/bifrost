@@ -266,19 +266,41 @@ func (m *MCPManager) runChatStreamAgentLoop(
 	out chan *schemas.BifrostStreamChunk,
 	depth, maxDepth int,
 ) {
+	// Stream non-tool-call chunks to the client immediately so tokens appear in
+	// real time (mirrors runResponsesStreamAgentLoop). Once a tool-call delta is
+	// seen, everything that follows is withheld so pi never receives the raw tool
+	// frames or the completion event when bifrost auto-executes the call. The full
+	// buffer is kept so tool calls can be reconstructed for the follow-up request.
 	var buf []*schemas.BifrostStreamChunk
+	forwarded := make(map[*schemas.BifrostStreamChunk]bool)
+	seenToolCall := false // true after first tool-call delta; gates all trailing chunks
 	for chunk := range stream {
-		if chunk != nil {
-			buf = append(buf, chunk)
+		if chunk == nil {
+			continue
 		}
+		buf = append(buf, chunk)
+		if chunk.BifrostChatResponse != nil && !seenToolCall {
+			for _, choice := range chunk.BifrostChatResponse.Choices {
+				if choice.ChatStreamResponseChoice == nil || choice.ChatStreamResponseChoice.Delta == nil {
+					continue
+				}
+				if len(choice.ChatStreamResponseChoice.Delta.ToolCalls) > 0 {
+					seenToolCall = true
+					break
+				}
+			}
+		}
+		if seenToolCall {
+			continue
+		}
+		out <- chunk
+		forwarded[chunk] = true
 	}
 
 	toolCalls := extractToolCallsFromChatStream(buf)
 
+	// No tool calls or depth limit reached — non-tool chunks already streamed, done.
 	if len(toolCalls) == 0 || depth >= maxDepth {
-		for _, chunk := range buf {
-			out <- chunk
-		}
 		return
 	}
 
@@ -296,9 +318,13 @@ func (m *MCPManager) runChatStreamAgentLoop(
 		}
 	}
 
+	// If nothing can be auto-executed, forward the withheld tool chunks so pi can
+	// handle the tool call natively, then return.
 	if len(autoExec) == 0 {
 		for _, chunk := range buf {
-			out <- chunk
+			if !forwarded[chunk] {
+				out <- chunk
+			}
 		}
 		return
 	}
