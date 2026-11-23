@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand/v2"
 	"sort"
 	"strings"
 	"sync"
@@ -104,6 +103,10 @@ type GovernancePlugin struct {
 	requiredHeaders       *[]string // pointer to live config slice; lowercased at check time
 	isEnterprise          bool
 	disableAutoToolInject *bool
+
+	// pool decides which of several providers serving one model takes a request, keeping a
+	// session on the provider it already warmed (see poolbalance.go).
+	pool *poolBalancer
 }
 
 // Init initializes and returns a governance plugin instance.
@@ -239,6 +242,7 @@ func Init(
 		isEnterprise:          config != nil && config.IsEnterprise,
 		disableAutoToolInject: disableAutoToolInject,
 		inMemoryStore:         inMemoryStore,
+		pool:                  newPoolBalancer(),
 	}
 	return plugin, nil
 }
@@ -322,6 +326,7 @@ func InitFromStore(
 		requiredHeaders:       requiredHeaders,
 		isEnterprise:          config != nil && config.IsEnterprise,
 		disableAutoToolInject: disableAutoToolInject,
+		pool:                  newPoolBalancer(),
 	}
 	return plugin, nil
 }
@@ -474,29 +479,19 @@ func (p *GovernancePlugin) LoadBalanceProvider(ctx *schemas.BifrostContext, req 
 		return nil
 	}
 
-	var selectedProvider schemas.ModelProvider
-	totalWeight := 0.0
-	for _, candidate := range weighted {
-		totalWeight += getWeight(candidate.Weight)
-	}
-	// Generate random number between 0 and totalWeight
-	randomValue := rand.Float64() * totalWeight
-	// Select provider based on weighted random selection
-	currentWeight := 0.0
-	for _, candidate := range weighted {
-		currentWeight += getWeight(candidate.Weight)
-		if randomValue <= currentWeight {
-			selectedProvider = schemas.ModelProvider(candidate.Provider)
-			break
-		}
-	}
-	// Fallback: if no provider was selected (shouldn't happen but guard against FP issues)
+	// Which provider serves this request is remembered per session, because an inference server
+	// caches the prompt prefix it has already seen: a conversation that moves between providers
+	// pays for its whole context again on the new one. Without a session id there is nothing to
+	// remember, so the choice is a weighted spread and every request stands alone.
+	sessionKey := sessionKeyFromContext(ctx)
+	chosen, reason := p.pool.pick(sessionKey, weighted)
+	selectedProvider := schemas.ModelProvider(chosen.Provider)
 	if selectedProvider == "" {
 		selectedProvider = schemas.ModelProvider(weighted[0].Provider)
 	}
 
-	p.logger.Debug("[governance] Selected provider: %s", selectedProvider)
-	ctx.AppendRoutingEngineLog(schemas.RoutingEngineGovernance, schemas.LogLevelInfo, fmt.Sprintf("Selected provider %s for model %s (from %d eligible: %v)", selectedProvider, modelStr, len(eligible), eligibleProviders))
+	p.logger.Debug("[governance] Selected provider: %s (%s)", selectedProvider, reason)
+	ctx.AppendRoutingEngineLog(schemas.RoutingEngineGovernance, schemas.LogLevelInfo, fmt.Sprintf("Selected provider %s for model %s: %s (from %d eligible: %v)", selectedProvider, modelStr, reason, len(eligible), eligibleProviders))
 
 	refinedModel := modelStr
 	// Refine the model for the selected provider
